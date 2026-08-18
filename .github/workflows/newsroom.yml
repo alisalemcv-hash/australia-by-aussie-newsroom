@@ -1,6 +1,9 @@
 name: Australia By Aussie Newsroom
 
 on:
+  push:
+    branches:
+      - main
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
@@ -61,12 +64,7 @@ jobs:
           repair_function = r'''
 
 def repair_exact_excerpt(result, story):
-    """Guarantee the website excerpt contains exactly 25 English words.
-
-    Models sometimes miss a hard word-count constraint even when JSON schema
-    validation succeeds. Repair the prose deterministically from the model
-    excerpt first, then the verified Guardian description/article text.
-    """
+    """Guarantee the website excerpt contains exactly 25 English words."""
     website = result.get("website", {})
     excerpt = clean_text(website.get("excerpt", ""))
     if len(count_english_words(excerpt)) == 25:

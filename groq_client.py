@@ -5,9 +5,9 @@ import time
 import requests
 import newsroom_runner as base
 
-# Provider order: Groq -> Gemini -> OpenRouter -> Mistral.
+# Provider order: Groq -> Gemini -> Mistral -> OpenRouter.
 # The first provider that successfully returns valid JSON is used for the article.
-PROVIDERS = ["groq", "gemini", "openrouter", "mistral"]
+PROVIDERS = ["groq", "gemini", "mistral", "openrouter"]
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
@@ -100,7 +100,6 @@ Return the JSON object now.
 
 def _clean_json_text(text):
     if isinstance(text, list):
-        # Some APIs may return content chunks.
         text = "".join(
             (part.get("text", "") if isinstance(part, dict) else str(part))
             for part in text
@@ -216,14 +215,14 @@ def _provider_call(provider, user_prompt):
         if not GEMINI_API_KEY:
             raise RuntimeError("GEMINI_API_KEY is not configured")
         return _ask_gemini(user_prompt)
-    if provider == "openrouter":
-        if not OPENROUTER_API_KEY:
-            raise RuntimeError("OPENROUTER_API_KEY is not configured")
-        return _post_openai_style(OPENROUTER_ENDPOINT, OPENROUTER_API_KEY, OPENROUTER_MODEL, user_prompt, provider)
     if provider == "mistral":
         if not MISTRAL_API_KEY:
             raise RuntimeError("MISTRAL_API_KEY is not configured")
         return _post_openai_style(MISTRAL_ENDPOINT, MISTRAL_API_KEY, MISTRAL_MODEL, user_prompt, provider)
+    if provider == "openrouter":
+        if not OPENROUTER_API_KEY:
+            raise RuntimeError("OPENROUTER_API_KEY is not configured")
+        return _post_openai_style(OPENROUTER_ENDPOINT, OPENROUTER_API_KEY, OPENROUTER_MODEL, user_prompt, provider)
     raise RuntimeError(f"Unknown AI provider: {provider}")
 
 

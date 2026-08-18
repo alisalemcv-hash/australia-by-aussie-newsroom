@@ -23,7 +23,7 @@ WP_URL = os.environ["WP_URL"].rstrip("/")
 WP_USERNAME = os.environ["WP_USERNAME"]
 WP_APP_PASSWORD = os.environ["WP_APP_PASSWORD"]
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.6-flash"
 
 
 MASTER_PROMPT = r"""

@@ -15,7 +15,7 @@ concurrency:
 jobs:
   newsroom:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -31,25 +31,36 @@ jobs:
           python -m pip install --upgrade pip
           pip install --disable-pip-version-check requests feedparser beautifulsoup4
 
-      - name: Select current OpenRouter model fallback
+      - name: Configure resilient OpenRouter fallback
         run: |
           python - <<'PY'
           from pathlib import Path
           p = Path("newsroom.py")
           s = p.read_text(encoding="utf-8")
+
           old = '''OPENROUTER_MODELS = [
               "google/gemma-4-26b-a4b-it:free",
               "openrouter/free"
           ]'''
           new = '''OPENROUTER_MODELS = [
-              "google/gemma-4-31b-it:free",
-              "openai/gpt-oss-120b:free",
-              "openrouter/free"
+              "openrouter/free",
+              "nvidia/nemotron-3-ultra-550b-a55b:free",
+              "google/gemma-4-26b-a4b-it:free",
+              "openai/gpt-oss-20b:free"
           ]'''
           if old not in s:
-              raise SystemExit("Expected OpenRouter model list was not found; refusing to run with an unknown configuration.")
-          p.write_text(s.replace(old, new, 1), encoding="utf-8")
-          print("OpenRouter model fallback configured: Gemma 4 31B -> GPT-OSS 120B -> free router")
+              raise SystemExit("Expected OpenRouter model list was not found; refusing to run with an unknown newsroom.py version.")
+          s = s.replace(old, new, 1)
+
+          old_provider = '"provider": {"require_parameters": True}'
+          new_provider = '"provider": {"require_parameters": True, "allow_fallbacks": True},\n            "plugins": [{"id": "response-healing"}]'
+          if old_provider not in s:
+              raise SystemExit("Expected OpenRouter provider configuration was not found; refusing to run with an unknown newsroom.py version.")
+          s = s.replace(old_provider, new_provider, 1)
+
+          p.write_text(s, encoding="utf-8")
+          print("OpenRouter configured: free router -> Nemotron 3 Ultra -> Gemma 4 26B -> GPT-OSS 20B")
+          print("Response Healing enabled for malformed JSON recovery")
           PY
 
       - name: Run Australia By Aussie Newsroom

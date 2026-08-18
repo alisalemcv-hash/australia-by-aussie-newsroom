@@ -5,6 +5,11 @@ import requests
 
 import newsroom_runner as base
 import groq_client
+import image_selector
+
+# Always use the relevance-first selector. It deliberately refuses weak matches
+# and never falls back to a Guardian/SBS branded image.
+base.choose_clean_image = image_selector.choose_clean_image
 
 GUARDIAN_RSS = "https://www.theguardian.com/australia-news/rss"
 SBS_RSS = "https://www.sbs.com.au/news/topic/australia/feed"
@@ -114,22 +119,14 @@ def _english_words(text):
 
 
 def repair_model_output(result):
-    """Deterministically repair mechanical fields before final validation.
-
-    This prevents a good article from being discarded because a free model counted
-    the excerpt incorrectly or omitted one of the required hashtags.
-    """
     website = result.setdefault("website", {})
     social = result.setdefault("social", {})
     video = result.setdefault("video", {})
 
-    # Exact 25-word excerpt. If the model misses the count, derive it from the
-    # article itself rather than inventing a sentence.
     words = _english_words(website.get("article_html", ""))
     if len(words) >= 25:
         website["excerpt"] = " ".join(words[:25])
 
-    # Exactly three hashtags, always including the site tag.
     category_tags = {
         "Politics": "#AustralianPolitics",
         "Business": "#AustralianBusiness",
@@ -153,7 +150,6 @@ def repair_model_output(result):
                 break
     video["hashtags"] = hashtags[:3]
 
-    # Keep the required engagement ending deterministic.
     facebook = social.get("english", "")
     if "👉 Have Your Say" not in facebook:
         facebook = facebook.rstrip() + "\n\n👉 Have Your Say\nDo you support this? YES or NO?"

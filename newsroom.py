@@ -15,9 +15,13 @@ STATE_FILE = "state.json"
 USER_AGENT = "AustraliaByAussie-Newsroom/5.0"
 
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
-# Fixed, supported free models: avoid openrouter/free because it can route randomly.
-# gpt-oss-20b is the fast first choice; 120b is the quality fallback.
-OPENROUTER_MODELS = ["openai/gpt-oss-20b:free", "openai/gpt-oss-120b:free"]
+# Use a currently verified free model with structured-output support first.
+# Keep OpenRouter's dynamic free router as a fallback so the workflow is not tied
+# to a model that may later disappear or become paid.
+OPENROUTER_MODELS = [
+    "google/gemma-4-26b-a4b-it:free",
+    "openrouter/free"
+]
 WP_URL = os.environ["WP_URL"].rstrip("/")
 WP_USERNAME = os.environ["WP_USERNAME"]
 WP_APP_PASSWORD = os.environ["WP_APP_PASSWORD"]
@@ -404,16 +408,23 @@ def call_openrouter(user_prompt):
                     continue
                 result = json.loads(match.group(0))
 
-            # Some free OpenRouter providers can return syntactically valid JSON
-            # that still ignores part of the requested schema. Never let that reach
-            # validate_story(), where a missing nested object would cause KeyError.
             if not isinstance(result, dict):
                 errors.append(f"{model}: JSON root is not an object")
                 continue
-            missing_top = [k for k in ("story_type", "website", "social") if k not in result or not isinstance(result.get(k), dict) and k != "story_type"]
             if "story_type" not in result or "website" not in result or "social" not in result:
                 errors.append(f"{model}: incomplete schema response; missing top-level fields")
                 continue
+
+            # Defensive repair for providers that encode a nested JSON object as a string.
+            for nested_key in ("website", "social"):
+                if isinstance(result.get(nested_key), str):
+                    try:
+                        decoded = json.loads(result[nested_key])
+                        if isinstance(decoded, dict):
+                            result[nested_key] = decoded
+                    except (TypeError, json.JSONDecodeError):
+                        pass
+
             if not isinstance(result.get("website"), dict) or not isinstance(result.get("social"), dict):
                 errors.append(f"{model}: website/social are not objects")
                 continue

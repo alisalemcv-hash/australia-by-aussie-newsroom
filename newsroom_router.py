@@ -4,12 +4,13 @@ import feedparser
 import requests
 
 import newsroom_runner as base
+import groq_client
 
 GUARDIAN_RSS = "https://www.theguardian.com/australia-news/rss"
 SBS_RSS = "https://www.sbs.com.au/news/topic/australia/feed"
 BUCKETS = [1, 2, 3, 4, 6, 8, 12, 18, 24]
 MAX_AGE = timedelta(hours=24)
-MAX_POSTS = 10
+MAX_POSTS = 2
 
 ROUTER_PROMPT = r"""You are the senior journalist and fact-checker for Australia By Aussie.
 Write natural Australian English only. Publish Australian news only. The lead may come from Guardian Australia or SBS News Australia; write a completely original article and never invent facts or quotes.
@@ -47,6 +48,8 @@ def feed_candidates(url, source):
         summary = base.clean_text(e.get("summary", ""))
         link = (e.get("link") or "").strip()
         if not title or not link:
+            continue
+        if source == "Guardian Australia" and not link.startswith("https://www.theguardian.com/australia-news/"):
             continue
         out.append({"id": base.article_id(link), "url": link, "title": title, "summary": summary, "published": published, "source": source})
     return out
@@ -125,7 +128,7 @@ def run():
             if not page.get("text"):
                 raise RuntimeError("NO_PUBLICATION: source page unavailable")
             story.update(page)
-            result = base.ask_openrouter_original(story, [])
+            result = groq_client.ask_groq(story, [])
             result = base.clean_english_result(result)
             verification = result.get("verification", {})
             if not result.get("publish", False) or verification.get("status") == "INSUFFICIENT VERIFIED INFORMATION":

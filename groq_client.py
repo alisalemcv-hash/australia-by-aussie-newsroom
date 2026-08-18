@@ -5,9 +5,23 @@ import time
 import requests
 import newsroom_runner as base
 
-GROQ_API_KEY = os.environ["GROQ_API_KEY"]
+# Provider order: Groq -> Gemini -> OpenRouter -> Mistral.
+# The first provider that successfully returns valid JSON is used for the article.
+PROVIDERS = ["groq", "gemini", "openrouter", "mistral"]
+
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
-ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "openrouter/free")
+MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "").strip()
+MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-small-latest")
+
+GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
+OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+MISTRAL_ENDPOINT = "https://api.mistral.ai/v1/chat/completions"
+GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 PROMPT = r"""
 You are the senior journalist and fact-checker for Australia By Aussie.
@@ -59,14 +73,13 @@ Do not add any other keys.
 """
 
 
-def ask_groq(story, sources=None):
-    sources = sources or []
+def build_user_prompt(story, sources):
     source_text = "\n\n".join(
         f"SOURCE {s.get('number','')}\nTitle: {s.get('title','')}\nURL: {s.get('url','')}\nPublished: {s.get('published','')}\nSummary: {s.get('summary','')}"
         for s in sources
     ) or "No additional source results were supplied."
 
-    user_prompt = f"""
+    return f"""
 {PROMPT}
 
 PRIMARY SOURCE
@@ -84,42 +97,154 @@ ADDITIONAL SOURCE MATERIAL:
 Return the JSON object now.
 """
 
+
+def _clean_json_text(text):
+    if isinstance(text, list):
+        # Some APIs may return content chunks.
+        text = "".join(
+            (part.get("text", "") if isinstance(part, dict) else str(part))
+            for part in text
+        )
+    text = str(text or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
+        text = re.sub(r"\s*```$", "", text).strip()
+    return text
+
+
+def _parse_openai_style(data, provider):
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(f"{provider} returned no message content") from exc
+    text = _clean_json_text(content)
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{provider} returned invalid JSON") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError(f"{provider} returned JSON that is not an object")
+    print(f"AI provider used: {provider} | model: {data.get('model', 'unknown')}")
+    return result
+
+
+def _post_openai_style(endpoint, key, model, user_prompt, provider):
     payload = {
-        "model": GROQ_MODEL,
+        "model": model,
         "messages": [{"role": "user", "content": user_prompt}],
         "temperature": 0.2,
         "max_tokens": 12000,
-        "response_format": {"type": "json_object"}
+        "response_format": {"type": "json_object"},
     }
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
-        "User-Agent": "AustraliaByAussie-Newsroom/1.0"
+        "User-Agent": "AustraliaByAussie-Newsroom/1.0",
     }
+    if provider == "openrouter":
+        headers["HTTP-Referer"] = "https://australiabyaussie.com"
+        headers["X-Title"] = "Australia By Aussie Newsroom"
 
-    for attempt in range(3):
+    last_error = None
+    for attempt in range(2):
         try:
-            response = requests.post(ENDPOINT, headers=headers, json=payload, timeout=180)
-            if response.status_code in (429, 500, 502, 503, 504) and attempt < 2:
-                wait = 5 * (attempt + 1)
-                print(f"Groq temporary HTTP {response.status_code}; retrying in {wait}s...")
-                time.sleep(wait)
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=180)
+            if response.status_code in (429, 500, 502, 503, 504) and attempt == 0:
+                print(f"{provider} temporary HTTP {response.status_code}; retrying once...")
+                time.sleep(5)
+                continue
+            response.raise_for_status()
+            return _parse_openai_style(response.json(), provider)
+        except requests.exceptions.RequestException as exc:
+            last_error = exc
+            if attempt == 0:
+                time.sleep(3)
+                continue
+            raise RuntimeError(f"{provider} API request failed: {exc}") from exc
+    raise RuntimeError(f"{provider} API request failed: {last_error}")
+
+
+def _ask_gemini(user_prompt):
+    url = GEMINI_ENDPOINT.format(model=GEMINI_MODEL)
+    params = {"key": GEMINI_API_KEY}
+    payload = {
+        "contents": [{"parts": [{"text": user_prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 12000,
+            "responseMimeType": "application/json",
+        },
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "AustraliaByAussie-Newsroom/1.0",
+    }
+    last_error = None
+    for attempt in range(2):
+        try:
+            response = requests.post(url, params=params, headers=headers, json=payload, timeout=180)
+            if response.status_code in (429, 500, 502, 503, 504) and attempt == 0:
+                print(f"gemini temporary HTTP {response.status_code}; retrying once...")
+                time.sleep(5)
                 continue
             response.raise_for_status()
             data = response.json()
-            text = data["choices"][0]["message"]["content"].strip()
-            if text.startswith("```"):
-                text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
-                text = re.sub(r"\s*```$", "", text).strip()
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+            text = _clean_json_text(text)
             result = json.loads(text)
-            print("Groq model:", data.get("model", GROQ_MODEL))
+            if not isinstance(result, dict):
+                raise RuntimeError("gemini returned JSON that is not an object")
+            print(f"AI provider used: gemini | model: {GEMINI_MODEL}")
             return result
         except requests.exceptions.RequestException as exc:
-            if attempt < 2:
-                time.sleep(5 * (attempt + 1))
+            last_error = exc
+            if attempt == 0:
+                time.sleep(3)
                 continue
-            raise RuntimeError(f"Groq API request failed: {exc}") from exc
-        except (KeyError, IndexError, json.JSONDecodeError) as exc:
-            raise RuntimeError("Groq returned an invalid newsroom response.") from exc
+            raise RuntimeError(f"gemini API request failed: {exc}") from exc
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("gemini returned an invalid newsroom response") from exc
+    raise RuntimeError(f"gemini API request failed: {last_error}")
 
-    raise RuntimeError("Groq request failed after retries.")
+
+def _provider_call(provider, user_prompt):
+    if provider == "groq":
+        if not GROQ_API_KEY:
+            raise RuntimeError("GROQ_API_KEY is not configured")
+        return _post_openai_style(GROQ_ENDPOINT, GROQ_API_KEY, GROQ_MODEL, user_prompt, provider)
+    if provider == "gemini":
+        if not GEMINI_API_KEY:
+            raise RuntimeError("GEMINI_API_KEY is not configured")
+        return _ask_gemini(user_prompt)
+    if provider == "openrouter":
+        if not OPENROUTER_API_KEY:
+            raise RuntimeError("OPENROUTER_API_KEY is not configured")
+        return _post_openai_style(OPENROUTER_ENDPOINT, OPENROUTER_API_KEY, OPENROUTER_MODEL, user_prompt, provider)
+    if provider == "mistral":
+        if not MISTRAL_API_KEY:
+            raise RuntimeError("MISTRAL_API_KEY is not configured")
+        return _post_openai_style(MISTRAL_ENDPOINT, MISTRAL_API_KEY, MISTRAL_MODEL, user_prompt, provider)
+    raise RuntimeError(f"Unknown AI provider: {provider}")
+
+
+def ask_groq(story, sources=None):
+    """Backward-compatible entry point used by newsroom_router.py.
+
+    Despite the historical function name, this now performs automatic provider
+    failover in the configured order and returns the first valid newsroom JSON.
+    """
+    sources = sources or []
+    user_prompt = build_user_prompt(story, sources)
+    errors = []
+
+    for provider in PROVIDERS:
+        try:
+            print(f"Trying AI provider: {provider}")
+            return _provider_call(provider, user_prompt)
+        except Exception as exc:
+            message = str(exc)
+            errors.append(f"{provider}: {message}")
+            print(f"AI provider failed: {provider}: {message}")
+            continue
+
+    raise RuntimeError("All configured AI providers failed: " + " | ".join(errors))

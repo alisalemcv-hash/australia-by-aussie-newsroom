@@ -8,9 +8,14 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: australia-by-aussie-newsroom
+  cancel-in-progress: false
+
 jobs:
   newsroom:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
@@ -20,11 +25,12 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          cache: "pip"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests feedparser beautifulsoup4 google-genai
+          pip install requests feedparser beautifulsoup4
 
       - name: Run Australia By Aussie Newsroom
         env:
@@ -32,16 +38,13 @@ jobs:
           WP_URL: ${{ secrets.WP_URL }}
           WP_USERNAME: ${{ secrets.WP_USERNAME }}
           WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
-        run: |
-          python newsroom.py
+        run: python newsroom.py
 
       - name: Save newsroom state
         run: |
           git config user.name "Australia By Aussie Newsroom"
           git config user.email "newsroom@australiabyaussie.com"
-
           git add state.json
-
           if git diff --cached --quiet; then
             echo "No state changes."
           else

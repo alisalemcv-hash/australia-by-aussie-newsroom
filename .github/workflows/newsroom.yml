@@ -1,7 +1,7 @@
 name: Australia By Aussie Newsroom
 
 on:
-  # GitHub Actions' minimum supported schedule interval is 5 minutes.
+  # GitHub Actions supports a minimum scheduled interval of 5 minutes.
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
@@ -38,9 +38,10 @@ jobs:
           WP_URL: ${{ secrets.WP_URL }}
           WP_USERNAME: ${{ secrets.WP_USERNAME }}
           WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
-        run: python newsroom_runner.py
+        run: python newsroom_router.py
 
       - name: Save newsroom state
+        if: always()
         run: |
           git config user.name "Australia By Aussie Newsroom"
           git config user.email "newsroom@australiabyaussie.com"

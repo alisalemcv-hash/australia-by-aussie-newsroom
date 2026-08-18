@@ -203,7 +203,6 @@ def get_article_page(url):
     section = clean_text(meta("article:section") or meta("og:section"))
     image_url = clean_text(meta("og:image"))
 
-    # Prefer the actual Guardian image URL, not icons or unrelated page images.
     if not image_url or "i.guim.co.uk" not in image_url:
         for img in soup.find_all("img"):
             for attr in ("src", "data-src"):
@@ -214,7 +213,6 @@ def get_article_page(url):
             if image_url and "i.guim.co.uk" in image_url:
                 break
 
-    # Keep enough of the article for the model, but avoid feeding the entire page/nav.
     main = soup.find("main") or soup
     for tag in main(["script", "style", "noscript", "svg", "nav", "footer", "form"]):
         tag.decompose()
@@ -224,10 +222,6 @@ def get_article_page(url):
         if len(text) >= 35:
             paragraphs.append(text)
     article_text = "\n".join(paragraphs)[:18000]
-
-    # Guardian visibly labels these formats on article pages. The URL/near-title text
-    # gives us a deterministic source-type hint so the model does not accidentally
-    # convert them into News.
     head_blob = clean_text(" ".join(paragraphs[:8]))[:5000]
     source_type = detect_source_type(url, title, head_blob, section)
 
@@ -288,8 +282,6 @@ def needs_official_source(story):
 
 
 def official_research(title):
-    # Google News is used only as a discovery index here; only final URLs on
-    # Australian official domains are accepted and then fetched directly.
     query = (
         f'"{title}" site:gov.au OR site:nsw.gov.au OR site:vic.gov.au OR '
         'site:qld.gov.au OR site:wa.gov.au OR site:sa.gov.au OR site:tas.gov.au '
@@ -365,7 +357,7 @@ def call_openrouter(user_prompt):
         payload = {
             "model": model,
             "messages": [
-                {"role": "system", "content": "You are a professional Australian news editor. Return only valid JSON."},
+                {"role": "system", "content": "You are a professional Australian news editor. Return one complete JSON object only. It MUST contain exactly these top-level objects: story_type, website, social. Never omit website or social."},
                 {"role": "user", "content": user_prompt}
             ],
             "temperature": 0.15,
@@ -411,6 +403,21 @@ def call_openrouter(user_prompt):
                     errors.append(f"{model}: invalid JSON")
                     continue
                 result = json.loads(match.group(0))
+
+            # Some free OpenRouter providers can return syntactically valid JSON
+            # that still ignores part of the requested schema. Never let that reach
+            # validate_story(), where a missing nested object would cause KeyError.
+            if not isinstance(result, dict):
+                errors.append(f"{model}: JSON root is not an object")
+                continue
+            missing_top = [k for k in ("story_type", "website", "social") if k not in result or not isinstance(result.get(k), dict) and k != "story_type"]
+            if "story_type" not in result or "website" not in result or "social" not in result:
+                errors.append(f"{model}: incomplete schema response; missing top-level fields")
+                continue
+            if not isinstance(result.get("website"), dict) or not isinstance(result.get("social"), dict):
+                errors.append(f"{model}: website/social are not objects")
+                continue
+
             print("OpenRouter model used:", data.get("model", model))
             return result
         except requests.exceptions.RequestException as exc:
@@ -623,7 +630,6 @@ def main():
     feed = get_feed()
     print(f"Guardian feed entries: {len(feed.entries)}")
 
-    # WordPress duplicate check is done before AI, so old stories never consume model calls.
     posts = get_recent_wp_posts(max_pages=3)
     print(f"Checked {len(posts)} recent WordPress posts for duplicates.")
 
@@ -647,7 +653,6 @@ def main():
             print("No official-source search needed for this story.")
 
         result = call_openrouter(build_prompt(story, official_sources))
-        # Never let the model silently change the source's content type.
         if story["source_type"] in {"opinion", "analysis", "explainer", "live"}:
             result["story_type"] = story["source_type"]
 
@@ -668,7 +673,6 @@ def main():
         print("PUBLISHED:", post.get("link", post.get("id")))
 
     except Exception as exc:
-        # Do not mark a failed candidate as processed: the next scheduled run can retry it.
         print("Candidate failed:", exc)
         raise
 

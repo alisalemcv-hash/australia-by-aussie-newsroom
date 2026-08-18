@@ -5,7 +5,7 @@ import html
 import hashlib
 import time
 from datetime import datetime, timezone
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 import requests
 import feedparser
@@ -13,8 +13,8 @@ from bs4 import BeautifulSoup
 
 
 # ============================================================
-# AUSTRALIA BY AUSSIE — AUTOMATED NEWSROOM
-# OPENROUTER FREE EDITION
+# AUSTRALIA BY AUSSIE — AUTOMATED NEWSROOM V2
+# PROFESSIONAL VERIFICATION EDITION
 # ============================================================
 
 GUARDIAN_RSS = "https://www.theguardian.com/australia-news/rss"
@@ -22,19 +22,8 @@ GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
 
 STATE_FILE = "state.json"
 
-# ============================================================
-# OPENROUTER
-# ============================================================
-
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
-
-# Official OpenRouter free router.
-# It automatically selects an available free model.
 OPENROUTER_MODEL = "openrouter/free"
-
-# ============================================================
-# WORDPRESS
-# ============================================================
 
 WP_URL = os.environ["WP_URL"].rstrip("/")
 WP_USERNAME = os.environ["WP_USERNAME"]
@@ -42,7 +31,7 @@ WP_APP_PASSWORD = os.environ["WP_APP_PASSWORD"]
 
 
 # ============================================================
-# MASTER PROMPT
+# MASTER NEWSROOM PROMPT
 # ============================================================
 
 MASTER_PROMPT = r"""
@@ -61,14 +50,15 @@ SOURCE ACCURACY
 → IMPORTANT DETAILS
 → CLEAR PRESENTATION
 
-RESEARCH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. RESEARCH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-The supplied Guardian article is ONLY a lead.
+Research the story using live web sources before writing.
 
-You have also been provided with additional live source results discovered
-from Google News RSS.
+Treat the supplied material as a lead.
 
-Use the supplied source material to verify the story.
+Find the ORIGINAL / PRIMARY SOURCE whenever possible.
 
 Prioritise:
 
@@ -80,12 +70,10 @@ Prioritise:
 • Official statements
 • Direct statements
 • Reputable Australian media
-• Original / primary sources
 
-Whenever a source result points to an official or primary source,
-treat that source as more authoritative than a secondary media report.
+Use reputable secondary sources to confirm facts when necessary.
 
-Do not assume that the Guardian article is correct simply because it is supplied.
+The final content must be based on information that can be verified from reliable sources.
 
 Verify all important:
 
@@ -103,37 +91,34 @@ Verify all important:
 • Current status
 • What happens next
 
-Do not include information simply because it appears in one source.
+Do not include information simply because it appears in the supplied article.
 
-If an important claim cannot be reliably verified, do not present it as fact.
+If an important claim cannot be verified, do not present it as fact.
 
-SOURCE HANDLING
-
-The source material may contain:
-
-• Duplicate reports
-• Old information
-• Conflicting information
-• Opinions
-• Commentary
-• Unverified claims
-
-Resolve conflicts using the strongest available source.
-
-If sources disagree and the disagreement cannot be resolved,
-state the uncertainty clearly.
-
-Do not invent missing information.
-
-ORIGINAL ARTICLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. ORIGINAL ARTICLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Write a completely ORIGINAL Australia By Aussie article.
 
-Do not copy, translate or closely rewrite any source.
+Do not copy, translate or closely rewrite the source.
 
-Use verified facts and write the story independently.
+Use the verified facts and write the story independently.
 
-Include everything a reader genuinely needs to understand the story.
+The article must contain everything a reader genuinely needs to understand the story.
+
+Include relevant:
+
+• Names
+• Numbers
+• Dates
+• Locations
+• Important events
+• Background
+• Consequences
+• Official responses
+• Relevant statements
+• What happens next
 
 Do NOT add:
 
@@ -146,108 +131,348 @@ Do NOT add:
 
 Every paragraph must provide useful information.
 
-QUOTES
+Article length depends on the amount of important verified information.
 
-Use important VERIFIED direct quotes when available.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. QUOTES — IMPORTANT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Quotes must come from the supplied source material.
+Use important VERIFIED direct quotes in:
 
-Use exact verified wording.
+• ARTICLE
+• FACEBOOK POST
+• VOICEOVER
+
+Quotes must come from the original or reliable source.
+
+Use the exact verified wording.
 
 Clearly identify who said it.
 
+Prioritise quotes that provide important information, reaction, confirmation or context.
+
 Never invent, reconstruct or alter a quote.
 
-If exact wording cannot be verified,
-paraphrase it without quotation marks.
+If the exact wording cannot be verified, paraphrase it without quotation marks.
 
-VERIFICATION
+If there is an important verified quote, do not remove it unnecessarily.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. VERIFICATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Give:
 
 VERIFICATION STATUS:
 VERIFIED / PARTIALLY VERIFIED / DEVELOPING / INSUFFICIENT VERIFIED INFORMATION
 
+Then briefly state:
+
+CONFIRMED:
+[Important confirmed facts]
+
+NOT CONFIRMED:
+[Only if something remains uncertain]
+
 If the story is not sufficiently verified:
 
 INSUFFICIENT VERIFIED INFORMATION — DO NOT PUBLISH
 
-CATEGORY
+Never fill missing information with assumptions.
 
-Use ONLY ONE:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. CATEGORY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Australia
-Business
-Cost of Living
-Crime & Courts
-Explainers
-Life
-Politics
-World
+Use ONLY ONE of these categories:
 
-WEBSITE
+• Australia
+• Business
+• Cost of Living
+• Crime & Courts
+• Explainers
+• Life
+• Politics
+• World
+
+There are NO subcategories.
+
+Choose the category according to the CENTRAL SUBJECT of the story.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. WEBSITE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 HEADLINE
+
+Create one factual headline.
+
 Maximum 9 English words.
 
-CATEGORY
-One approved category.
+Arabic translation.
 
-WHY
-One short explanation.
+CATEGORY
+
+[One approved category]
+
+WHY:
+
+[One short explanation]
 
 EXCERPT
-EXACTLY 25 ENGLISH WORDS.
+
+Write EXACTLY 25 ENGLISH WORDS.
+
+Not 24.
+
+Not 26.
+
+Exactly 25 English words.
+
+The excerpt must be based only on the verified article.
+
+Then provide the Arabic translation.
 
 TAG
+
 Exactly ONE relevant WordPress tag.
 
 IMAGE
 
-Provide:
+Based on the actual image and article:
 
 ALT TEXT
 TITLE
 CAPTION
 DESCRIPTION
 
+All must be factual.
+
+Never invent what the image shows.
+
+Provide Arabic translations.
+
 ARTICLE
 
-Complete original English article.
+Write the complete original article using only verified information.
 
-Then complete Arabic translation.
+Include important names, numbers, dates, locations, statements, quotes, context and what happens next.
 
-FACEBOOK / INSTAGRAM
+Then provide the complete Arabic translation.
 
-Maximum 2,000 English characters INCLUDING spaces.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. FACEBOOK / INSTAGRAM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Target 1,700–1,950 characters.
+Create ONE detailed social post based directly on the article.
+
+Maximum:
+
+2,000 English characters INCLUDING spaces.
+
+Target:
+
+1,700–1,950 characters.
+
+The post must be a condensed version of the article, NOT a teaser.
 
 The reader should understand the actual story without opening the website.
+
+Use the available space for important information.
+
+Prioritise:
+
+• Names
+• Numbers
+• Dates
+• Locations
+• Key events
+• Important statements
+• Important verified quotes
+• Background needed to understand the story
+• Why it matters
+• What happens next
+
+Do not add filler.
+
+Do not waste characters on generic wording.
+
+Include an important verified quote when one is available and relevant.
+
+Use the exact verified wording.
 
 End with:
 
 👉 Have Your Say
 
-Then ONE specific YES / NO question.
+Then ONE specific YES / NO question about the actual story.
 
-VIDEO
+The entire English post, including the question, MUST remain under 2,000 characters.
+
+Then provide the complete Arabic translation.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. VIDEO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 VIDEO TITLE
 
+Factual title.
+
+English + Arabic.
+
 VOICEOVER
 
-Complete news voiceover based only on verified information.
+Write a complete news voiceover based only on the verified article.
 
-VIDEO CAPTION
+Include the information the viewer needs to understand the story:
 
-Immediately followed by exactly three hashtags.
+• Names
+• Numbers
+• Dates
+• Locations
+• Key facts
+• Important statements
+• Important verified quotes
+• Why it matters
+• What happens next
+
+Use important verified quotes when available.
+
+Use exact wording.
+
+Clearly identify the speaker.
+
+Do not add filler or unverified information.
+
+Then provide the complete Arabic translation.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. VIDEO CAPTION + HASHTAGS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Write one concise factual caption based on the article.
+
+Immediately after it, write exactly three hashtags.
 
 One MUST be:
 
 #AustraliaByAussies
 
+The other two must be relevant to the story.
+
+Do not write labels such as:
+
+Caption:
+Hashtags:
+
+Just write the caption followed by the three hashtags.
+
+Then provide the Arabic caption.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10. FINAL OUTPUT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Always use this order:
+
+🇦🇺 VERIFICATION
+
+Status
+
+Confirmed
+
+Not Confirmed
+
+---
+
+📰 WEBSITE
+
+Headline
+
+Arabic Headline
+
+Category
+
+Why
+
+25-Word Excerpt
+
+Arabic Excerpt
+
+One Tag
+
+Alt Text
+
+Arabic Alt Text
+
+Title
+
+Arabic Title
+
+Caption
+
+Arabic Caption
+
+Description
+
+Arabic Description
+
+Complete English Article
+
+Complete Arabic Article
+
+---
+
+📱 FACEBOOK / INSTAGRAM
+
+Detailed English Post
+
+👉 Have Your Say
+
+YES / NO Question
+
+Complete Arabic Post
+
+👉 Have Your Say
+
+Arabic Question
+
+---
+
+🎬 VIDEO
+
+Video Title
+
+Arabic Title
+
+Complete Voiceover
+
+Complete Arabic Voiceover
+
+---
+
+[Caption]
+
+#AustraliaByAussies #RelevantHashtag #RelevantHashtag
+
+Arabic Caption
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FINAL RULE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Give the reader the INFORMATION THEY ACTUALLY NEED.
+
+Every important fact must come from a verified source.
+
+Use names, numbers, dates, locations and important details.
+
+Use verified direct quotes when available.
+
+Write originally.
+
+Remove anything that does not add useful information.
 
 NO FILLER.
 NO SPECULATION.
@@ -262,7 +487,84 @@ FACEBOOK / INSTAGRAM = MAXIMUM 2,000 ENGLISH CHARACTERS.
 
 
 # ============================================================
-# HELPERS
+# HARD EDITORIAL RULES
+# ============================================================
+
+EDITORIAL_RULES = r"""
+NON-NEGOTIABLE EDITORIAL VERIFICATION RULES
+
+1. SOURCE MATERIAL IS EVIDENCE, NOT TRUTH BY DEFAULT.
+
+2. Every important factual claim must be supported by at least one
+   reliable source.
+
+3. High-risk claims should preferably have a primary/official source.
+
+4. Distinguish clearly between:
+   CONFIRMED
+   REPORTED
+   NOT CONFIRMED
+   CONFLICTING
+
+5. Never convert "reported", "alleged", "according to media",
+   or "sources say" into confirmed fact.
+
+6. If police, government, court, regulator, club or other official
+   authority has not confirmed a claim, do not write that authority
+   confirmed it.
+
+7. A media report can establish that something was REPORTED,
+   but does not automatically establish that the underlying allegation
+   is true.
+
+8. Never state that a person committed a crime unless that fact is
+   officially established and legally safe to report.
+
+9. For allegations involving sexual assault, abuse, serious crime,
+   or misconduct, apply extra caution to names and alleged conduct.
+
+10. If a person's name appears only in secondary reporting and their
+    identity or involvement is not independently verified, do not
+    present the person as confirmed to be involved.
+
+11. Never invent quotes.
+
+12. Never reconstruct a quote from a paraphrase.
+
+13. A quote may only be used when its exact wording appears in the
+    supplied source material.
+
+14. If sources conflict on a material fact and the conflict cannot
+    be resolved, mark the relevant information as NOT CONFIRMED.
+
+15. If a central claim cannot be verified sufficiently:
+    publish = false
+
+16. Do not publish a developing story simply because it is trending.
+
+17. Include important verified information even if it makes the article
+    longer.
+
+18. Do not remove important context merely to make the article shorter.
+
+19. Do not add facts from model knowledge.
+
+20. Use only information contained in the supplied evidence.
+
+21. The article must be original in wording and structure.
+
+22. Do not imitate the source article's paragraph structure.
+
+23. Do not use source-specific phrasing unnecessarily.
+
+24. The final article must distinguish allegations from established facts.
+
+25. The verification decision must happen BEFORE final writing.
+"""
+
+
+# ============================================================
+# STATE
 # ============================================================
 
 def load_state():
@@ -298,7 +600,10 @@ def load_state():
 def save_state(state):
 
     state["processed"] = (
-        state.get("processed", [])[-200:]
+        state.get(
+            "processed",
+            []
+        )[-200:]
     )
 
     with open(
@@ -315,6 +620,10 @@ def save_state(state):
         )
 
 
+# ============================================================
+# TEXT HELPERS
+# ============================================================
+
 def clean_text(value):
 
     if not value:
@@ -328,7 +637,9 @@ def clean_text(value):
         strip=True
     )
 
-    value = html.unescape(value)
+    value = html.unescape(
+        value
+    )
 
     value = re.sub(
         r"\s+",
@@ -342,8 +653,19 @@ def clean_text(value):
 def article_id(url):
 
     return hashlib.sha256(
-        url.encode("utf-8")
+        url.encode(
+            "utf-8"
+        )
     ).hexdigest()[:20]
+
+
+def count_words(text):
+
+    return re.findall(
+        r"\b[\w’'-]+\b",
+        text,
+        flags=re.UNICODE
+    )
 
 
 # ============================================================
@@ -353,13 +675,12 @@ def article_id(url):
 def http_get(
     url,
     timeout=30,
-    headers=None,
-    allow_redirects=True
+    headers=None
 ):
 
     default_headers = {
         "User-Agent":
-            "AustraliaByAussie-Newsroom/1.0"
+            "AustraliaByAussie-Newsroom/2.0"
     }
 
     if headers:
@@ -371,7 +692,7 @@ def http_get(
         url,
         timeout=timeout,
         headers=default_headers,
-        allow_redirects=allow_redirects
+        allow_redirects=True
     )
 
     response.raise_for_status()
@@ -380,7 +701,7 @@ def http_get(
 
 
 # ============================================================
-# GUARDIAN RSS
+# GUARDIAN
 # ============================================================
 
 def get_feed():
@@ -395,28 +716,110 @@ def get_feed():
     )
 
 
-# ============================================================
-# GOOGLE NEWS RSS SOURCE DISCOVERY
-# ============================================================
+def get_article_page(url):
 
-def search_google_news(query):
-
-    """
-    Free source discovery using Google News RSS.
-
-    This does NOT use the paid OpenRouter web-search feature.
-    """
-
-    encoded_query = quote_plus(
-        query
+    response = http_get(
+        url,
+        timeout=30
     )
 
+    soup = BeautifulSoup(
+        response.text,
+        "html.parser"
+    )
+
+    title = ""
+    description = ""
+    image_url = ""
+
+    og_title = soup.find(
+        "meta",
+        property="og:title"
+    )
+
+    og_description = soup.find(
+        "meta",
+        property="og:description"
+    )
+
+    og_image = soup.find(
+        "meta",
+        property="og:image"
+    )
+
+    if og_title:
+        title = og_title.get(
+            "content",
+            ""
+        )
+
+    if og_description:
+        description = og_description.get(
+            "content",
+            ""
+        )
+
+    if og_image:
+        image_url = og_image.get(
+            "content",
+            ""
+        )
+
+    if not image_url:
+
+        twitter_image = soup.find(
+            "meta",
+            attrs={
+                "name": "twitter:image"
+            }
+        )
+
+        if twitter_image:
+            image_url = twitter_image.get(
+                "content",
+                ""
+            )
+
+    paragraphs = []
+
+    for p in soup.find_all("p"):
+
+        text = clean_text(
+            p.get_text(
+                " ",
+                strip=True
+            )
+        )
+
+        if text and len(text) > 40:
+
+            paragraphs.append(
+                text
+            )
+
+    return {
+        "title": clean_text(title),
+        "description": clean_text(description),
+        "image_url": image_url,
+        "text": "\n".join(
+            paragraphs[:100]
+        )
+    }
+
+
+# ============================================================
+# GOOGLE NEWS RESEARCH
+# ============================================================
+
+def google_news_search(query):
+
     url = (
-        f"{GOOGLE_NEWS_RSS}"
-        f"?q={encoded_query}"
-        f"&hl=en-AU"
-        f"&gl=AU"
-        f"&ceid=AU:en"
+        GOOGLE_NEWS_RSS
+        + "?q="
+        + quote_plus(query)
+        + "&hl=en-AU"
+        + "&gl=AU"
+        + "&ceid=AU:en"
     )
 
     try:
@@ -433,7 +836,7 @@ def search_google_news(query):
     except Exception as e:
 
         print(
-            "Google News search failed:",
+            "Google News research error:",
             str(e)
         )
 
@@ -441,7 +844,7 @@ def search_google_news(query):
 
     results = []
 
-    for entry in feed.entries[:10]:
+    for entry in feed.entries[:12]:
 
         title = clean_text(
             entry.get(
@@ -488,10 +891,10 @@ def search_google_news(query):
 
 
 # ============================================================
-# SOURCE PAGE
+# SOURCE PAGE EXTRACTION
 # ============================================================
 
-def get_source_page(url):
+def fetch_source(url):
 
     try:
 
@@ -502,15 +905,12 @@ def get_source_page(url):
 
     except Exception as e:
 
-        print(
-            "Could not open source:",
-            url
-        )
-
         return {
+            "url": url,
             "title": "",
             "description": "",
-            "text": ""
+            "text": "",
+            "error": str(e)
         }
 
     soup = BeautifulSoup(
@@ -562,188 +962,212 @@ def get_source_page(url):
                 text
             )
 
-    page_text = "\n".join(
-        paragraphs[:50]
-    )
-
     return {
+        "url": url,
         "title": clean_text(title),
         "description": clean_text(description),
-        "text": page_text
+        "text": "\n".join(
+            paragraphs[:60]
+        ),
+        "error": ""
     }
 
 
 # ============================================================
-# GUARDIAN ARTICLE PAGE
+# SOURCE TYPE DETECTION
 # ============================================================
 
-def get_article_page(url):
+def classify_source(url, title=""):
 
-    response = http_get(
-        url,
-        timeout=30
+    value = (
+        url
+        + " "
+        + title
+    ).lower()
+
+    official_domains = [
+        ".gov.au",
+        "police.nsw.gov.au",
+        "police.vic.gov.au",
+        "police.qld.gov.au",
+        "police.wa.gov.au",
+        "police.sa.gov.au",
+        "police.tas.gov.au",
+        "police.nt.gov.au",
+        "afl.com.au",
+        "sydneyswans.com.au",
+        "abc.net.au",
+        "court",
+        "ato.gov.au",
+        "treasury.gov.au",
+        "pm.gov.au",
+        "health.gov.au",
+        "homeaffairs.gov.au",
+        "asic.gov.au",
+        "accc.gov.au"
+    ]
+
+    for domain in official_domains:
+
+        if domain in value:
+
+            return "PRIMARY_OR_OFFICIAL"
+
+    reputable_domains = [
+        "theguardian.com",
+        "abc.net.au",
+        "sbs.com.au",
+        "smh.com.au",
+        "theage.com.au",
+        "news.com.au",
+        "afr.com",
+        "aap.com.au",
+        "9news.com.au",
+        "7news.com.au",
+        "abc.net.au"
+    ]
+
+    for domain in reputable_domains:
+
+        if domain in value:
+
+            return "REPUTABLE_SECONDARY"
+
+    return "SECONDARY_OR_UNKNOWN"
+
+
+# ============================================================
+# RESEARCH COLLECTION
+# ============================================================
+
+def collect_research(story):
+
+    print(
+        "Researching story before writing..."
     )
 
-    soup = BeautifulSoup(
-        response.text,
-        "html.parser"
-    )
+    searches = [
+        story["title"],
+        f'"{story["title"]}" Australia',
+        f'{story["title"]} official statement',
+    ]
 
-    title = ""
-    description = ""
-    image_url = ""
+    all_results = []
 
-    og_title = soup.find(
-        "meta",
-        property="og:title"
-    )
+    seen_urls = set()
 
-    og_description = soup.find(
-        "meta",
-        property="og:description"
-    )
+    for query in searches:
 
-    og_image = soup.find(
-        "meta",
-        property="og:image"
-    )
-
-    if og_title:
-
-        title = og_title.get(
-            "content",
-            ""
+        results = google_news_search(
+            query
         )
 
-    if og_description:
+        for result in results:
 
-        description = og_description.get(
-            "content",
-            ""
+            url = result["url"]
+
+            if url in seen_urls:
+                continue
+
+            seen_urls.add(
+                url
+            )
+
+            result["source_type"] = classify_source(
+                url,
+                result["title"]
+            )
+
+            all_results.append(
+                result
+            )
+
+        time.sleep(0.3)
+
+    # Primary/official first.
+    all_results.sort(
+        key=lambda item: (
+            0
+            if item["source_type"]
+            == "PRIMARY_OR_OFFICIAL"
+            else 1
+            if item["source_type"]
+            == "REPUTABLE_SECONDARY"
+            else 2
+        )
+    )
+
+    # Fetch a limited number of pages to stay light.
+    pages = []
+
+    for result in all_results[:10]:
+
+        print(
+            "Research source:",
+            result["title"]
         )
 
-    if og_image:
-
-        image_url = og_image.get(
-            "content",
-            ""
+        page = fetch_source(
+            result["url"]
         )
 
-    if not image_url:
-
-        image = soup.find(
-            "meta",
-            attrs={
-                "name": "twitter:image"
+        pages.append(
+            {
+                **result,
+                "page_title": page["title"],
+                "page_description": page["description"],
+                "page_text": page["text"],
+                "page_error": page["error"]
             }
         )
 
-        if image:
+        time.sleep(0.2)
 
-            image_url = image.get(
-                "content",
-                ""
-            )
-
-    paragraphs = []
-
-    for p in soup.find_all("p"):
-
-        text = clean_text(
-            p.get_text(
-                " ",
-                strip=True
-            )
-        )
-
-        if text and len(text) > 40:
-
-            paragraphs.append(
-                text
-            )
-
-    page_text = "\n".join(
-        paragraphs[:80]
-    )
-
-    return {
-        "title": clean_text(title),
-        "description": clean_text(description),
-        "image_url": image_url,
-        "text": page_text
-    }
+    return pages
 
 
-# ============================================================
-# BUILD ADDITIONAL SOURCES
-# ============================================================
+def format_research(research):
 
-def collect_sources(story):
+    if not research:
 
-    print(
-        "Searching free Google News sources..."
-    )
-
-    query = story["title"]
-
-    results = search_google_news(
-        query
-    )
-
-    print(
-        f"Found {len(results)} additional source results."
-    )
-
-    sources = []
-
-    # Avoid sending too much data to the model.
-    for index, result in enumerate(
-        results[:8],
-        start=1
-    ):
-
-        source = {
-            "number": index,
-            "title": result["title"],
-            "url": result["url"],
-            "published": result["published"],
-            "summary": result["summary"]
-        }
-
-        sources.append(
-            source
-        )
-
-    return sources
-
-
-def format_sources(sources):
-
-    if not sources:
         return (
-            "No additional Google News "
-            "source results were available."
+            "NO ADDITIONAL SOURCES FOUND."
         )
 
     blocks = []
 
-    for source in sources:
+    for index, source in enumerate(
+        research,
+        start=1
+    ):
 
         blocks.append(
             f"""
-SOURCE {source["number"]}
+SOURCE {index}
 
-Title:
+SOURCE TYPE:
+{source["source_type"]}
+
+TITLE:
 {source["title"]}
 
 URL:
 {source["url"]}
 
-Published:
+PUBLISHED:
 {source["published"]}
 
-Summary:
+SUMMARY:
 {source["summary"]}
+
+PAGE TITLE:
+{source["page_title"]}
+
+PAGE DESCRIPTION:
+{source["page_description"]}
+
+PAGE TEXT:
+{source["page_text"][:9000]}
 """.strip()
         )
 
@@ -756,9 +1180,9 @@ Summary:
 # OPENROUTER
 # ============================================================
 
-def ask_openrouter(
-    story,
-    sources
+def call_openrouter(
+    messages,
+    schema
 ):
 
     endpoint = (
@@ -766,344 +1190,24 @@ def ask_openrouter(
         "chat/completions"
     )
 
-    source_text = format_sources(
-        sources
-    )
-
-    prompt = f"""
-{MASTER_PROMPT}
-
-IMPORTANT AUTOMATION RULES:
-
-1. The supplied Guardian article is ONLY a lead.
-2. Additional source results were discovered through Google News RSS.
-3. Compare the supplied sources before writing.
-4. Prefer official and primary sources.
-5. Do not assume a claim is true merely because multiple media outlets repeat it.
-6. Never invent a quote.
-7. Only use direct quotes whose wording appears in the supplied source material.
-8. If there is not enough reliable information, set:
-   "publish": false
-9. If important facts conflict and cannot be resolved, do not publish.
-10. Return ONLY valid JSON.
-11. Do not wrap JSON in Markdown fences.
-12. Do not include commentary outside the JSON object.
-
-PRIMARY LEAD:
-
-Title:
-{story["title"]}
-
-URL:
-{story["url"]}
-
-Description:
-{story["description"]}
-
-Source page text:
-{story["text"]}
-
-ADDITIONAL LIVE SOURCE DISCOVERY:
-
-{source_text}
-
-Return exactly this JSON structure:
-
-{{
-  "verification": {{
-    "status": "",
-    "confirmed": [],
-    "not_confirmed": []
-  }},
-
-  "publish": true,
-
-  "website": {{
-    "headline": "",
-    "arabic_headline": "",
-    "category": "",
-    "why": "",
-    "excerpt": "",
-    "arabic_excerpt": "",
-    "tag": "",
-    "alt_text": "",
-    "arabic_alt_text": "",
-    "image_title": "",
-    "arabic_image_title": "",
-    "caption": "",
-    "arabic_caption": "",
-    "description": "",
-    "arabic_description": "",
-    "article_html": "",
-    "arabic_article_html": ""
-  }},
-
-  "social": {{
-    "english": "",
-    "arabic": ""
-  }},
-
-  "video": {{
-    "title": "",
-    "arabic_title": "",
-    "voiceover": "",
-    "arabic_voiceover": "",
-    "caption": "",
-    "hashtags": []
-  }}
-}}
-
-The article_html must contain the complete original English article.
-
-The arabic_article_html must contain the complete Arabic translation.
-
-The English Facebook/Instagram post MUST be under 2,000 characters including spaces.
-
-The excerpt MUST contain exactly 25 English words.
-
-The hashtags array MUST contain exactly 3 hashtags.
-
-One hashtag MUST be:
-
-#AustraliaByAussies
-
-Do not put hashtags anywhere else.
-
-Do not add information that cannot be verified.
-"""
-
-    # --------------------------------------------------------
-    # JSON SCHEMA
-    # --------------------------------------------------------
-
-    schema = {
-        "type": "object",
-        "properties": {
-
-            "verification": {
-                "type": "object",
-                "properties": {
-                    "status": {
-                        "type": "string"
-                    },
-                    "confirmed": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    },
-                    "not_confirmed": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    }
-                },
-                "required": [
-                    "status",
-                    "confirmed",
-                    "not_confirmed"
-                ],
-                "additionalProperties": False
-            },
-
-            "publish": {
-                "type": "boolean"
-            },
-
-            "website": {
-                "type": "object",
-                "properties": {
-
-                    "headline": {
-                        "type": "string"
-                    },
-
-                    "arabic_headline": {
-                        "type": "string"
-                    },
-
-                    "category": {
-                        "type": "string"
-                    },
-
-                    "why": {
-                        "type": "string"
-                    },
-
-                    "excerpt": {
-                        "type": "string"
-                    },
-
-                    "arabic_excerpt": {
-                        "type": "string"
-                    },
-
-                    "tag": {
-                        "type": "string"
-                    },
-
-                    "alt_text": {
-                        "type": "string"
-                    },
-
-                    "arabic_alt_text": {
-                        "type": "string"
-                    },
-
-                    "image_title": {
-                        "type": "string"
-                    },
-
-                    "arabic_image_title": {
-                        "type": "string"
-                    },
-
-                    "caption": {
-                        "type": "string"
-                    },
-
-                    "arabic_caption": {
-                        "type": "string"
-                    },
-
-                    "description": {
-                        "type": "string"
-                    },
-
-                    "arabic_description": {
-                        "type": "string"
-                    },
-
-                    "article_html": {
-                        "type": "string"
-                    },
-
-                    "arabic_article_html": {
-                        "type": "string"
-                    }
-                },
-
-                "required": [
-                    "headline",
-                    "arabic_headline",
-                    "category",
-                    "why",
-                    "excerpt",
-                    "arabic_excerpt",
-                    "tag",
-                    "alt_text",
-                    "arabic_alt_text",
-                    "image_title",
-                    "arabic_image_title",
-                    "caption",
-                    "arabic_caption",
-                    "description",
-                    "arabic_description",
-                    "article_html",
-                    "arabic_article_html"
-                ],
-
-                "additionalProperties": False
-            },
-
-            "social": {
-                "type": "object",
-                "properties": {
-                    "english": {
-                        "type": "string"
-                    },
-                    "arabic": {
-                        "type": "string"
-                    }
-                },
-                "required": [
-                    "english",
-                    "arabic"
-                ],
-                "additionalProperties": False
-            },
-
-            "video": {
-                "type": "object",
-                "properties": {
-
-                    "title": {
-                        "type": "string"
-                    },
-
-                    "arabic_title": {
-                        "type": "string"
-                    },
-
-                    "voiceover": {
-                        "type": "string"
-                    },
-
-                    "arabic_voiceover": {
-                        "type": "string"
-                    },
-
-                    "caption": {
-                        "type": "string"
-                    },
-
-                    "hashtags": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    }
-                },
-
-                "required": [
-                    "title",
-                    "arabic_title",
-                    "voiceover",
-                    "arabic_voiceover",
-                    "caption",
-                    "hashtags"
-                ],
-
-                "additionalProperties": False
-            }
-        },
-
-        "required": [
-            "verification",
-            "publish",
-            "website",
-            "social",
-            "video"
-        ],
-
-        "additionalProperties": False
-    }
-
     payload = {
-
         "model": OPENROUTER_MODEL,
 
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
+        "messages": messages,
 
-        # OpenRouter structured output.
         "response_format": {
             "type": "json_schema",
             "json_schema": {
-                "name": "australia_by_aussie_newsroom",
+                "name":
+                    "australia_by_aussie_newsroom",
                 "strict": True,
                 "schema": schema
             }
         },
 
-        "temperature": 0.2,
+        "temperature": 0.15,
 
-        "max_tokens": 16000,
+        "max_tokens": 18000,
 
         "provider": {
             "require_parameters": True
@@ -1124,19 +1228,9 @@ Do not add information that cannot be verified.
             "Australia By Aussie Newsroom"
     }
 
-    print(
-        "Sending story to OpenRouter Free..."
-    )
-
-    # --------------------------------------------------------
-    # RETRY ONLY FOR TEMPORARY SERVER / RATE LIMIT ERRORS
-    # --------------------------------------------------------
-
-    max_attempts = 3
-
     for attempt in range(
         1,
-        max_attempts + 1
+        4
     ):
 
         try:
@@ -1145,7 +1239,7 @@ Do not add information that cannot be verified.
                 endpoint,
                 headers=headers,
                 json=payload,
-                timeout=180
+                timeout=240
             )
 
             if response.status_code in (
@@ -1156,157 +1250,849 @@ Do not add information that cannot be verified.
                 504
             ):
 
-                if attempt < max_attempts:
+                if attempt < 3:
 
-                    wait_seconds = (
-                        5 * attempt
+                    wait = (
+                        attempt * 6
                     )
 
                     print(
-                        f"OpenRouter temporary error "
-                        f"{response.status_code}. "
-                        f"Retrying in "
-                        f"{wait_seconds}s..."
+                        f"Temporary OpenRouter "
+                        f"error {response.status_code}; "
+                        f"retrying in {wait}s..."
                     )
 
                     time.sleep(
-                        wait_seconds
+                        wait
                     )
 
                     continue
 
             response.raise_for_status()
 
-            break
+            data = response.json()
+
+            model_used = data.get(
+                "model",
+                "unknown"
+            )
+
+            print(
+                "OpenRouter model used:",
+                model_used
+            )
+
+            content = (
+                data["choices"][0]
+                ["message"]
+                ["content"]
+            )
+
+            if not content:
+
+                raise RuntimeError(
+                    "OpenRouter returned empty content."
+                )
+
+            content = content.strip()
+
+            if content.startswith("```"):
+
+                content = re.sub(
+                    r"^```json\s*",
+                    "",
+                    content,
+                    flags=re.IGNORECASE
+                )
+
+                content = re.sub(
+                    r"\s*```$",
+                    "",
+                    content
+                )
+
+                content = content.strip()
+
+            return json.loads(
+                content
+            )
 
         except requests.exceptions.HTTPError as e:
 
             try:
 
-                error_data = (
-                    response.json()
-                )
-
-                error_message = json.dumps(
-                    error_data,
-                    ensure_ascii=False
-                )
+                error = response.json()
 
             except Exception:
 
-                error_message = (
-                    response.text[:5000]
-                )
+                error = response.text[:5000]
 
             raise RuntimeError(
-                f"OpenRouter API HTTP error "
+                "OpenRouter HTTP error "
                 f"{response.status_code}:\n"
-                f"{error_message}"
+                + json.dumps(
+                    error,
+                    ensure_ascii=False
+                )[:6000]
             ) from e
 
         except requests.exceptions.RequestException as e:
 
-            if attempt < max_attempts:
-
-                wait_seconds = (
-                    5 * attempt
-                )
-
-                print(
-                    "OpenRouter request failed. "
-                    f"Retrying in {wait_seconds}s..."
-                )
+            if attempt < 3:
 
                 time.sleep(
-                    wait_seconds
+                    attempt * 6
                 )
 
                 continue
 
             raise RuntimeError(
-                f"OpenRouter API request failed: {e}"
+                f"OpenRouter request failed: {e}"
             ) from e
 
-    data = response.json()
 
-    # --------------------------------------------------------
-    # EXTRACT RESPONSE
-    # --------------------------------------------------------
+# ============================================================
+# VERIFICATION SCHEMA
+# ============================================================
 
-    try:
+VERIFICATION_SCHEMA = {
 
-        message = (
-            data["choices"][0]["message"]
-        )
+    "type": "object",
 
-        text = message.get(
-            "content",
-            ""
-        )
+    "properties": {
 
-    except Exception:
+        "status": {
+            "type": "string",
+            "enum": [
+                "VERIFIED",
+                "PARTIALLY VERIFIED",
+                "DEVELOPING",
+                "INSUFFICIENT VERIFIED INFORMATION"
+            ]
+        },
 
-        raise RuntimeError(
-            "OpenRouter returned an unexpected response:\n"
-            + json.dumps(
-                data,
-                ensure_ascii=False
-            )[:6000]
-        )
+        "publish": {
+            "type": "boolean"
+        },
 
-    if not text:
+        "confirmed": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
 
-        raise RuntimeError(
-            "OpenRouter returned empty content:\n"
-            + json.dumps(
-                data,
-                ensure_ascii=False
-            )[:6000]
-        )
+        "reported_only": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
 
-    text = text.strip()
+        "not_confirmed": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
 
-    # Safety fallback.
-    if text.startswith("```"):
+        "conflicts": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
 
-        text = re.sub(
-            r"^```json\s*",
-            "",
-            text,
-            flags=re.IGNORECASE
-        )
+        "primary_sources": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
 
-        text = re.sub(
-            r"\s*```$",
-            "",
-            text
-        )
+        "secondary_sources": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
 
-        text = text.strip()
+        "verified_quotes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "speaker": {
+                        "type": "string"
+                    },
+                    "quote": {
+                        "type": "string"
+                    },
+                    "source": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "speaker",
+                    "quote",
+                    "source"
+                ],
+                "additionalProperties": False
+            }
+        }
+    },
 
-    try:
+    "required": [
+        "status",
+        "publish",
+        "confirmed",
+        "reported_only",
+        "not_confirmed",
+        "conflicts",
+        "primary_sources",
+        "secondary_sources",
+        "verified_quotes"
+    ],
 
-        result = json.loads(
-            text
-        )
+    "additionalProperties": False
+}
 
-    except json.JSONDecodeError as e:
 
-        raise RuntimeError(
-            "OpenRouter returned invalid JSON.\n\n"
-            + text[:6000]
-        ) from e
+# ============================================================
+# VERIFICATION STAGE
+# ============================================================
 
-    # Print the actual model selected by the router.
-    print(
-        "OpenRouter model used:",
-        data.get(
-            "model",
-            "unknown"
-        )
+def verify_story(
+    story,
+    research
+):
+
+    research_text = format_research(
+        research
+    )
+
+    prompt = f"""
+You are the verification desk for Australia By Aussie.
+
+Do NOT write an article.
+
+Your ONLY job is to verify the supplied story.
+
+Use the following MASTER NEWSROOM PRIORITY:
+
+SOURCE ACCURACY
+→ VERIFIED FACTS
+→ PRIMARY SOURCES
+→ RELIABLE SECONDARY CONFIRMATION
+→ CLEAR UNCERTAINTY
+
+{EDITORIAL_RULES}
+
+IMPORTANT:
+
+• The Guardian story is a lead, not automatic truth.
+• Research sources are evidence.
+• Primary/official sources have highest authority.
+• Reputable Australian media can confirm reported information.
+• Do not turn media reporting into official confirmation.
+• Do not invent any facts.
+• Do not invent quotes.
+• Do not use model knowledge.
+• If a central fact cannot be sufficiently verified, publish=false.
+
+For each important factual claim, decide whether it is:
+
+CONFIRMED
+REPORTED_ONLY
+NOT_CONFIRMED
+CONFLICTING
+
+A quote is verified ONLY if its exact wording appears in the supplied
+source text.
+
+SOURCE LEAD:
+
+Title:
+{story["title"]}
+
+URL:
+{story["url"]}
+
+Description:
+{story["description"]}
+
+Guardian page text:
+{story["text"]}
+
+ADDITIONAL RESEARCH:
+
+{research_text}
+
+Return ONLY JSON.
+"""
+
+    result = call_openrouter(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "You are a strict senior news "
+                    "verification editor."
+                )
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        VERIFICATION_SCHEMA
     )
 
     return result
+
+
+# ============================================================
+# ARTICLE SCHEMA
+# ============================================================
+
+ARTICLE_SCHEMA = {
+
+    "type": "object",
+
+    "properties": {
+
+        "website": {
+            "type": "object",
+            "properties": {
+
+                "headline": {
+                    "type": "string"
+                },
+
+                "arabic_headline": {
+                    "type": "string"
+                },
+
+                "category": {
+                    "type": "string",
+                    "enum": [
+                        "Australia",
+                        "Business",
+                        "Cost of Living",
+                        "Crime & Courts",
+                        "Explainers",
+                        "Life",
+                        "Politics",
+                        "World"
+                    ]
+                },
+
+                "why": {
+                    "type": "string"
+                },
+
+                "excerpt": {
+                    "type": "string"
+                },
+
+                "arabic_excerpt": {
+                    "type": "string"
+                },
+
+                "tag": {
+                    "type": "string"
+                },
+
+                "alt_text": {
+                    "type": "string"
+                },
+
+                "arabic_alt_text": {
+                    "type": "string"
+                },
+
+                "image_title": {
+                    "type": "string"
+                },
+
+                "arabic_image_title": {
+                    "type": "string"
+                },
+
+                "caption": {
+                    "type": "string"
+                },
+
+                "arabic_caption": {
+                    "type": "string"
+                },
+
+                "description": {
+                    "type": "string"
+                },
+
+                "arabic_description": {
+                    "type": "string"
+                },
+
+                "article_html": {
+                    "type": "string"
+                },
+
+                "arabic_article_html": {
+                    "type": "string"
+                }
+            },
+
+            "required": [
+                "headline",
+                "arabic_headline",
+                "category",
+                "why",
+                "excerpt",
+                "arabic_excerpt",
+                "tag",
+                "alt_text",
+                "arabic_alt_text",
+                "image_title",
+                "arabic_image_title",
+                "caption",
+                "arabic_caption",
+                "description",
+                "arabic_description",
+                "article_html",
+                "arabic_article_html"
+            ],
+
+            "additionalProperties": False
+        },
+
+        "social": {
+            "type": "object",
+            "properties": {
+
+                "english": {
+                    "type": "string"
+                },
+
+                "arabic": {
+                    "type": "string"
+                }
+            },
+
+            "required": [
+                "english",
+                "arabic"
+            ],
+
+            "additionalProperties": False
+        },
+
+        "video": {
+            "type": "object",
+            "properties": {
+
+                "title": {
+                    "type": "string"
+                },
+
+                "arabic_title": {
+                    "type": "string"
+                },
+
+                "voiceover": {
+                    "type": "string"
+                },
+
+                "arabic_voiceover": {
+                    "type": "string"
+                },
+
+                "caption": {
+                    "type": "string"
+                },
+
+                "hashtags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            },
+
+            "required": [
+                "title",
+                "arabic_title",
+                "voiceover",
+                "arabic_voiceover",
+                "caption",
+                "hashtags"
+            ],
+
+            "additionalProperties": False
+        }
+    },
+
+    "required": [
+        "website",
+        "social",
+        "video"
+    ],
+
+    "additionalProperties": False
+}
+
+
+# ============================================================
+# WRITING STAGE
+# ============================================================
+
+def write_story(
+    story,
+    research,
+    verification
+):
+
+    research_text = format_research(
+        research
+    )
+
+    verification_text = json.dumps(
+        verification,
+        ensure_ascii=False,
+        indent=2
+    )
+
+    prompt = f"""
+{MASTER_PROMPT}
+
+{EDITORIAL_RULES}
+
+AUTOMATED WORKFLOW RULES
+
+The verification stage has already been completed.
+
+You MUST write ONLY from the VERIFIED EVIDENCE below.
+
+Do not add information from model memory.
+
+Do not invent anything.
+
+Do not upgrade reported information into confirmed information.
+
+If the verification says something is reported only,
+preserve that distinction in the article.
+
+If a fact is not confirmed, do not state it as established fact.
+
+IMPORTANT QUOTE RULE:
+
+You may use ONLY quotes listed in verified_quotes.
+
+Use the exact wording.
+
+Do not alter them.
+
+Do not create new quotes.
+
+IMPORTANT COMPLETENESS RULE:
+
+Do not unnecessarily shorten the story.
+
+Include every important verified fact needed for a reader
+to understand the story.
+
+Do not add filler.
+
+SOURCE LEAD:
+
+Title:
+{story["title"]}
+
+URL:
+{story["url"]}
+
+Guardian page text:
+{story["text"]}
+
+VERIFICATION REPORT:
+
+{verification_text}
+
+RESEARCH EVIDENCE:
+
+{research_text}
+
+Return ONLY the JSON object matching the required schema.
+"""
+
+    return call_openrouter(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "You are the senior journalist and "
+                    "fact-checked news editor for "
+                    "Australia By Aussie."
+                )
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        ARTICLE_SCHEMA
+    )
+
+
+# ============================================================
+# HARD VALIDATION
+# ============================================================
+
+def validate_output(
+    result,
+    verification
+):
+
+    errors = []
+
+    website = result.get(
+        "website",
+        {}
+    )
+
+    social = result.get(
+        "social",
+        {}
+    )
+
+    video = result.get(
+        "video",
+        {}
+    )
+
+    headline = website.get(
+        "headline",
+        ""
+    )
+
+    excerpt = website.get(
+        "excerpt",
+        ""
+    )
+
+    tag = website.get(
+        "tag",
+        ""
+    )
+
+    facebook = social.get(
+        "english",
+        ""
+    )
+
+    hashtags = video.get(
+        "hashtags",
+        []
+    )
+
+    article_html = website.get(
+        "article_html",
+        ""
+    )
+
+    arabic_article = website.get(
+        "arabic_article_html",
+        ""
+    )
+
+    allowed_categories = {
+        "Australia",
+        "Business",
+        "Cost of Living",
+        "Crime & Courts",
+        "Explainers",
+        "Life",
+        "Politics",
+        "World"
+    }
+
+    # --------------------------------------------------------
+    # VERIFICATION GATE
+    # --------------------------------------------------------
+
+    status = verification.get(
+        "status",
+        ""
+    )
+
+    if status not in {
+        "VERIFIED",
+        "PARTIALLY VERIFIED",
+        "DEVELOPING"
+    }:
+
+        errors.append(
+            "Verification status is insufficient."
+        )
+
+    if not verification.get(
+        "publish",
+        False
+    ):
+
+        errors.append(
+            "Verification stage rejected publication."
+        )
+
+    if verification.get(
+        "conflicts"
+    ):
+
+        errors.append(
+            "Material source conflicts remain."
+        )
+
+    # --------------------------------------------------------
+    # HEADLINE
+    # --------------------------------------------------------
+
+    if len(
+        headline.split()
+    ) > 9:
+
+        errors.append(
+            "Headline exceeds 9 English words."
+        )
+
+    # --------------------------------------------------------
+    # EXCERPT
+    # --------------------------------------------------------
+
+    excerpt_words = count_words(
+        excerpt
+    )
+
+    if len(excerpt_words) != 25:
+
+        errors.append(
+            "Excerpt must contain exactly "
+            f"25 English words; found "
+            f"{len(excerpt_words)}."
+        )
+
+    # --------------------------------------------------------
+    # CATEGORY
+    # --------------------------------------------------------
+
+    if website.get(
+        "category"
+    ) not in allowed_categories:
+
+        errors.append(
+            "Invalid category."
+        )
+
+    # --------------------------------------------------------
+    # TAG
+    # --------------------------------------------------------
+
+    if not tag:
+
+        errors.append(
+            "Missing WordPress tag."
+        )
+
+    # --------------------------------------------------------
+    # ARTICLE
+    # --------------------------------------------------------
+
+    if len(
+        BeautifulSoup(
+            article_html,
+            "html.parser"
+        ).get_text(
+            " ",
+            strip=True
+        )
+    ) < 250:
+
+        errors.append(
+            "English article is too short."
+        )
+
+    if len(
+        BeautifulSoup(
+            arabic_article,
+            "html.parser"
+        ).get_text(
+            " ",
+            strip=True
+        )
+    ) < 150:
+
+        errors.append(
+            "Arabic article is too short."
+        )
+
+    # --------------------------------------------------------
+    # FACEBOOK
+    # --------------------------------------------------------
+
+    if len(facebook) > 2000:
+
+        errors.append(
+            "Facebook post exceeds 2,000 characters."
+        )
+
+    if "👉 Have Your Say" not in facebook:
+
+        errors.append(
+            "Facebook post missing Have Your Say."
+        )
+
+    # --------------------------------------------------------
+    # HASHTAGS
+    # --------------------------------------------------------
+
+    if len(hashtags) != 3:
+
+        errors.append(
+            "Exactly three hashtags required."
+        )
+
+    if "#AustraliaByAussies" not in hashtags:
+
+        errors.append(
+            "Missing #AustraliaByAussies."
+        )
+
+    # --------------------------------------------------------
+    # IMAGE METADATA
+    # --------------------------------------------------------
+
+    for field in [
+        "alt_text",
+        "image_title",
+        "caption",
+        "description"
+    ]:
+
+        if not website.get(field):
+
+            errors.append(
+                f"Missing image field: {field}"
+            )
+
+    if errors:
+
+        raise ValueError(
+            "FINAL VALIDATION FAILED:\n"
+            + "\n".join(
+                f"- {error}"
+                for error in errors
+            )
+        )
 
 
 # ============================================================
@@ -1341,22 +2127,19 @@ def upload_image(
 
         content_type = "image/jpeg"
 
-    media_endpoint = (
+    endpoint = (
         f"{WP_URL}/wp-json/wp/v2/media"
     )
 
     upload = requests.post(
-        media_endpoint,
+        endpoint,
         auth=wp_auth(),
-
         headers={
             "Content-Disposition":
                 f'attachment; filename="{filename}"',
-
             "Content-Type":
                 content_type
         },
-
         data=response.content,
         timeout=90
     )
@@ -1367,18 +2150,16 @@ def upload_image(
 
     media_id = media["id"]
 
-    metadata_response = requests.post(
-        f"{media_endpoint}/{media_id}",
+    metadata = requests.post(
+        f"{endpoint}/{media_id}",
         auth=wp_auth(),
-
         json={
             "alt_text": alt_text
         },
-
         timeout=30
     )
 
-    metadata_response.raise_for_status()
+    metadata.raise_for_status()
 
     return media_id
 
@@ -1395,157 +2176,28 @@ def publish_post(
     response = requests.post(
         endpoint,
         auth=wp_auth(),
-
         json={
-            "title": content["headline"],
-            "content": content["article_html"],
-            "excerpt": content["excerpt"],
-            "status": "publish",
-            "featured_media": featured_media
-        },
+            "title":
+                content["headline"],
 
+            "content":
+                content["article_html"],
+
+            "excerpt":
+                content["excerpt"],
+
+            "status":
+                "publish",
+
+            "featured_media":
+                featured_media
+        },
         timeout=90
     )
 
     response.raise_for_status()
 
     return response.json()
-
-
-# ============================================================
-# VALIDATION
-# ============================================================
-
-def count_words(text):
-
-    return re.findall(
-        r"\b[\w’'-]+\b",
-        text,
-        flags=re.UNICODE
-    )
-
-
-def validate_story(result):
-
-    website = result.get(
-        "website",
-        {}
-    )
-
-    social = result.get(
-        "social",
-        {}
-    )
-
-    video = result.get(
-        "video",
-        {}
-    )
-
-    errors = []
-
-    headline = website.get(
-        "headline",
-        ""
-    )
-
-    excerpt = website.get(
-        "excerpt",
-        ""
-    )
-
-    tag = website.get(
-        "tag",
-        ""
-    )
-
-    category = website.get(
-        "category",
-        ""
-    )
-
-    facebook = social.get(
-        "english",
-        ""
-    )
-
-    hashtags = video.get(
-        "hashtags",
-        []
-    )
-
-    allowed_categories = {
-        "Australia",
-        "Business",
-        "Cost of Living",
-        "Crime & Courts",
-        "Explainers",
-        "Life",
-        "Politics",
-        "World"
-    }
-
-    if len(
-        headline.split()
-    ) > 9:
-
-        errors.append(
-            "Headline exceeds 9 words."
-        )
-
-    if len(
-        count_words(excerpt)
-    ) != 25:
-
-        errors.append(
-            "Excerpt is not exactly 25 words: "
-            f"{len(count_words(excerpt))}"
-        )
-
-    if not tag:
-
-        errors.append(
-            "Missing WordPress tag."
-        )
-
-    if category not in allowed_categories:
-
-        errors.append(
-            f"Invalid category: {category}"
-        )
-
-    if len(facebook) > 2000:
-
-        errors.append(
-            "Facebook post exceeds 2,000 "
-            f"characters: {len(facebook)}"
-        )
-
-    if "👉 Have Your Say" not in facebook:
-
-        errors.append(
-            "Facebook post is missing "
-            "Have Your Say."
-        )
-
-    if len(hashtags) != 3:
-
-        errors.append(
-            "Hashtag count is not exactly 3."
-        )
-
-    if "#AustraliaByAussies" not in hashtags:
-
-        errors.append(
-            "Missing #AustraliaByAussies."
-        )
-
-    if errors:
-
-        raise ValueError(
-            "Validation failed:\n"
-            + "\n".join(errors)
-        )
 
 
 # ============================================================
@@ -1559,20 +2211,15 @@ def main():
     )
 
     print(
-        "Australia By Aussie Automated Newsroom"
+        "Australia By Aussie Automated Newsroom V2"
     )
 
     print(
-        "OPENROUTER FREE"
+        "PROFESSIONAL VERIFICATION EDITION"
     )
 
     print(
         "=============================================="
-    )
-
-    print(
-        "OpenRouter model:",
-        OPENROUTER_MODEL
     )
 
     state = load_state()
@@ -1583,6 +2230,10 @@ def main():
             []
         )
     )
+
+    # --------------------------------------------------------
+    # FIND NEWS
+    # --------------------------------------------------------
 
     print(
         "Checking Guardian Australia RSS..."
@@ -1602,10 +2253,13 @@ def main():
 
     for entry in feed.entries[:25]:
 
-        url = entry.get(
-            "link",
-            ""
-        ).strip()
+        url = (
+            entry.get(
+                "link",
+                ""
+            )
+            .strip()
+        )
 
         if not url:
             continue
@@ -1617,26 +2271,29 @@ def main():
         if key in processed:
             continue
 
-        title = clean_text(
-            entry.get(
-                "title",
-                ""
-            )
-        )
-
-        description = clean_text(
-            entry.get(
-                "summary",
-                ""
-            )
-        )
-
         candidates.append(
             {
-                "id": key,
-                "url": url,
-                "title": title,
-                "description": description
+                "id":
+                    key,
+
+                "url":
+                    url,
+
+                "title":
+                    clean_text(
+                        entry.get(
+                            "title",
+                            ""
+                        )
+                    ),
+
+                "description":
+                    clean_text(
+                        entry.get(
+                            "summary",
+                            ""
+                        )
+                    )
             }
         )
 
@@ -1648,15 +2305,11 @@ def main():
 
         return
 
+    story = candidates[0]
+
     print(
         f"Found {len(candidates)} new candidates."
     )
-
-    # --------------------------------------------------------
-    # ONE STORY PER RUN
-    # --------------------------------------------------------
-
-    story = candidates[0]
 
     print(
         "Selected:"
@@ -1665,6 +2318,10 @@ def main():
     print(
         story["title"]
     )
+
+    # --------------------------------------------------------
+    # SOURCE PAGE
+    # --------------------------------------------------------
 
     print(
         "Opening source page..."
@@ -1704,49 +2361,119 @@ def main():
         "Image found."
     )
 
-    print(
-        story["image_url"]
-    )
-
     # --------------------------------------------------------
-    # FREE SOURCE DISCOVERY
+    # RESEARCH
     # --------------------------------------------------------
 
-    sources = collect_sources(
+    research = collect_research(
         story
     )
 
+    print(
+        f"Collected {len(research)} research sources."
+    )
+
     # --------------------------------------------------------
-    # OPENROUTER
+    # VERIFICATION
     # --------------------------------------------------------
 
-    result = ask_openrouter(
+    print(
+        "=============================================="
+    )
+
+    print(
+        "STARTING VERIFICATION BEFORE WRITING"
+    )
+
+    print(
+        "=============================================="
+    )
+
+    verification = verify_story(
         story,
-        sources
-    )
-
-    verification = result.get(
-        "verification",
-        {}
-    )
-
-    status = verification.get(
-        "status",
-        ""
+        research
     )
 
     print(
         "Verification status:",
-        status
+        verification.get(
+            "status"
+        )
     )
 
-    if not result.get(
+    print(
+        "Confirmed facts:",
+        len(
+            verification.get(
+                "confirmed",
+                []
+            )
+        )
+    )
+
+    print(
+        "Reported-only facts:",
+        len(
+            verification.get(
+                "reported_only",
+                []
+            )
+        )
+    )
+
+    print(
+        "Not confirmed:",
+        len(
+            verification.get(
+                "not_confirmed",
+                []
+            )
+        )
+    )
+
+    print(
+        "Primary sources:",
+        len(
+            verification.get(
+                "primary_sources",
+                []
+            )
+        )
+    )
+
+    print(
+        "Verified quotes:",
+        len(
+            verification.get(
+                "verified_quotes",
+                []
+            )
+        )
+    )
+
+    # --------------------------------------------------------
+    # HARD STOP BEFORE WRITING
+    # --------------------------------------------------------
+
+    if not verification.get(
         "publish",
         False
     ):
 
         print(
-            "Story was not approved for publishing."
+            "=============================================="
+        )
+
+        print(
+            "DO NOT PUBLISH"
+        )
+
+        print(
+            "Verification did not approve publication."
+        )
+
+        print(
+            "=============================================="
         )
 
         processed.add(
@@ -1763,13 +2490,12 @@ def main():
 
         return
 
-    if status == (
-        "INSUFFICIENT VERIFIED INFORMATION"
+    if verification.get(
+        "conflicts"
     ):
 
         print(
-            "Insufficient verified information. "
-            "Not publishing."
+            "Material source conflicts detected."
         )
 
         processed.add(
@@ -1787,11 +2513,34 @@ def main():
         return
 
     # --------------------------------------------------------
-    # VALIDATE BEFORE PUBLISHING
+    # WRITING
     # --------------------------------------------------------
 
-    validate_story(
-        result
+    print(
+        "Verification passed."
+    )
+
+    print(
+        "Writing original Australia By Aussie story..."
+    )
+
+    result = write_story(
+        story,
+        research,
+        verification
+    )
+
+    # --------------------------------------------------------
+    # FINAL VALIDATION
+    # --------------------------------------------------------
+
+    print(
+        "Running final editorial validation..."
+    )
+
+    validate_output(
+        result,
+        verification
     )
 
     website = result["website"]
@@ -1808,34 +2557,32 @@ def main():
 
     try:
 
-        head_response = requests.head(
+        head = requests.head(
             story["image_url"],
             timeout=30,
-
             headers={
                 "User-Agent":
-                    "AustraliaByAussie-Newsroom/1.0"
+                    "AustraliaByAussie-Newsroom/2.0"
             },
-
             allow_redirects=True
         )
 
-        content_type = head_response.headers.get(
+        content_type = head.headers.get(
             "Content-Type",
             ""
-        )
+        ).lower()
+
+        if "png" in content_type:
+
+            extension = ".png"
+
+        elif "webp" in content_type:
+
+            extension = ".webp"
 
     except Exception:
 
-        content_type = ""
-
-    if "png" in content_type.lower():
-
-        extension = ".png"
-
-    elif "webp" in content_type.lower():
-
-        extension = ".webp"
+        pass
 
     filename = (
         re.sub(
@@ -1871,6 +2618,10 @@ def main():
         website,
         media_id
     )
+
+    # --------------------------------------------------------
+    # SUCCESS
+    # --------------------------------------------------------
 
     print(
         "=============================================="
@@ -1909,7 +2660,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # SAVE STATE
+    # STATE
     # --------------------------------------------------------
 
     processed.add(

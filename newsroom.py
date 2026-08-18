@@ -23,7 +23,7 @@ WP_USERNAME = os.environ["WP_USERNAME"]
 WP_APP_PASSWORD = os.environ["WP_APP_PASSWORD"]
 
 # Current stable Gemini Flash model
-GEMINI_MODEL = "gemini-3.6-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 
 MASTER_PROMPT = r"""

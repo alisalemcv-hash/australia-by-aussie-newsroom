@@ -1,4 +1,4 @@
-import os, re, json
+import os, re, json, time, hashlib
 from datetime import datetime, timezone, timedelta
 from urllib.parse import quote_plus
 import requests, feedparser
@@ -33,12 +33,17 @@ def parse_entry_time(entry):
 
 def resolve_guardian_url(url):
     try:
-        r = requests.get(url, timeout=20,
-                         headers={"User-Agent": "AustraliaByAussie-Newsroom/1.0"},
-                         allow_redirects=True)
-        return r.url if "theguardian.com/australia-news/" in r.url else url
+        r = requests.get(
+            url,
+            timeout=20,
+            headers={"User-Agent": "AustraliaByAussie-Newsroom/1.0"},
+            allow_redirects=True,
+        )
+        if "theguardian.com/australia-news/" in r.url:
+            return r.url
     except Exception:
-        return url
+        pass
+    return url
 
 
 def discover_old_guardian_stories():
@@ -55,8 +60,11 @@ def discover_old_guardian_stories():
     for query in queries:
         url = f"{GOOGLE_NEWS_RSS}?q={quote_plus(query)}&hl=en-AU&gl=AU&ceid=AU:en"
         try:
-            response = requests.get(url, timeout=30,
-                                    headers={"User-Agent": "AustraliaByAussie-Newsroom/1.0"})
+            response = requests.get(
+                url,
+                timeout=30,
+                headers={"User-Agent": "AustraliaByAussie-Newsroom/1.0"},
+            )
             response.raise_for_status()
             feed = feedparser.parse(response.content)
         except Exception as exc:
@@ -70,12 +78,19 @@ def discover_old_guardian_stories():
             age = now - published
             if age < MIN_AGE or age > MAX_AGE:
                 continue
+
             title = clean_text(entry.get("title", ""))
             link = resolve_guardian_url(entry.get("link", "").strip())
             if not title or "theguardian.com/australia-news/" not in link:
                 continue
+
             key = article_id(link)
-            candidates[key] = {"id": key, "url": link, "title": title, "published": published}
+            candidates[key] = {
+                "id": key,
+                "url": link,
+                "title": title,
+                "published": published,
+            }
 
     return sorted(candidates.values(), key=lambda item: item["published"], reverse=True)
 
@@ -86,12 +101,20 @@ def exact_25_word_excerpt(result):
     words = re.findall(r"\b[\w’'-]+\b", excerpt, flags=re.UNICODE)
     if len(words) == 25:
         return
+
     article = BeautifulSoup(website.get("article_html", ""), "html.parser").get_text(" ", strip=True)
     article_words = re.findall(r"\b[\w’'-]+\b", article, flags=re.UNICODE)
+
     if len(words) > 25:
         website["excerpt"] = " ".join(words[:25])
-    else:
-        website["excerpt"] = " ".join((words + article_words)[:25])
+        return
+
+    combined = words[:]
+    for word in article_words:
+        if len(combined) >= 25:
+            break
+        combined.append(word)
+    website["excerpt"] = " ".join(combined[:25])
 
 
 def image_extension(url):
@@ -111,20 +134,17 @@ def run_one():
 
     story = next((c for c in candidates if c["id"] not in processed), None)
     if not story:
-        print("No eligible unprocessed Guardian story found.")
-        return False
+        raise RuntimeError("NO_PUBLICATION: No eligible unprocessed Guardian story found.")
 
     print("Selected:", story["title"])
     page = ns["get_article_page"](story["url"])
     if not page.get("text"):
-        print("Source page unavailable. Skipping.")
-        return False
+        raise RuntimeError("NO_PUBLICATION: Guardian source page was unavailable.")
     story.update(page)
 
     image_url = story.get("image_url", "").strip()
     if not image_url:
-        print("No Guardian image found. Skipping.")
-        return False
+        raise RuntimeError("NO_PUBLICATION: No Guardian source image was found.")
     print("Guardian image found:", image_url)
 
     sources = collect_sources(story)
@@ -134,22 +154,27 @@ def run_one():
     print("Verification status:", status)
 
     if not result.get("publish", False) or status == "INSUFFICIENT VERIFIED INFORMATION":
-        print("Story not approved for publishing.")
-        return False
+        raise RuntimeError(
+            "NO_PUBLICATION: Story was not approved for publishing. "
+            f"publish={result.get('publish', False)}, status={status!r}"
+        )
 
     exact_25_word_excerpt(result)
     validate_story(result)
     website = result["website"]
 
-    # Use the Guardian source image as supplied. Never crop, erase, or remove branding/watermarks.
     filename = re.sub(r"[^a-zA-Z0-9]+", "-", website["headline"]).strip("-").lower() + image_extension(image_url)
     media_id = upload_image(image_url, filename, website["alt_text"])
     print("Image uploaded. Media ID:", media_id)
 
     post = publish_post(website, media_id)
     post_id = post.get("id")
-    if not post_id:
-        raise RuntimeError("WordPress returned no post ID after publish request.")
+    post_status = post.get("status")
+    if not post_id or post_status != "publish":
+        raise RuntimeError(
+            "WORDPRESS_PUBLISH_FAILED: WordPress did not confirm a published post. "
+            f"id={post_id!r}, status={post_status!r}"
+        )
 
     print("PUBLISHED SUCCESSFULLY")
     print("Title:", post.get("title", {}).get("rendered"))

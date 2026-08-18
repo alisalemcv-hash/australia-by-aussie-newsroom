@@ -2,7 +2,6 @@ import os
 import json
 import re
 import html
-import base64
 import hashlib
 from datetime import datetime, timezone
 
@@ -23,6 +22,7 @@ WP_URL = os.environ["WP_URL"].rstrip("/")
 WP_USERNAME = os.environ["WP_USERNAME"]
 WP_APP_PASSWORD = os.environ["WP_APP_PASSWORD"]
 
+# Current stable Gemini Flash model
 GEMINI_MODEL = "gemini-3.6-flash"
 
 
@@ -249,7 +249,11 @@ def clean_text(value):
     if not value:
         return ""
 
-    value = BeautifulSoup(str(value), "html.parser").get_text(" ", strip=True)
+    value = BeautifulSoup(
+        str(value),
+        "html.parser"
+    ).get_text(" ", strip=True)
+
     value = html.unescape(value)
     value = re.sub(r"\s+", " ", value)
 
@@ -257,10 +261,13 @@ def clean_text(value):
 
 
 def article_id(url):
-    return hashlib.sha256(url.encode("utf-8")).hexdigest()[:20]
+    return hashlib.sha256(
+        url.encode("utf-8")
+    ).hexdigest()[:20]
 
 
 def get_feed():
+
     response = requests.get(
         GUARDIAN_RSS,
         timeout=30,
@@ -275,6 +282,7 @@ def get_feed():
 
 
 def get_article_page(url):
+
     response = requests.get(
         url,
         timeout=30,
@@ -285,41 +293,82 @@ def get_article_page(url):
 
     response.raise_for_status()
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    soup = BeautifulSoup(
+        response.text,
+        "html.parser"
+    )
 
     title = ""
     description = ""
     image_url = ""
 
-    og_title = soup.find("meta", property="og:title")
-    og_description = soup.find("meta", property="og:description")
-    og_image = soup.find("meta", property="og:image")
+    og_title = soup.find(
+        "meta",
+        property="og:title"
+    )
+
+    og_description = soup.find(
+        "meta",
+        property="og:description"
+    )
+
+    og_image = soup.find(
+        "meta",
+        property="og:image"
+    )
 
     if og_title:
-        title = og_title.get("content", "")
+        title = og_title.get(
+            "content",
+            ""
+        )
 
     if og_description:
-        description = og_description.get("content", "")
+        description = og_description.get(
+            "content",
+            ""
+        )
 
     if og_image:
-        image_url = og_image.get("content", "")
+        image_url = og_image.get(
+            "content",
+            ""
+        )
 
     # Fallback image
     if not image_url:
-        image = soup.find("meta", attrs={"name": "twitter:image"})
+
+        image = soup.find(
+            "meta",
+            attrs={
+                "name": "twitter:image"
+            }
+        )
+
         if image:
-            image_url = image.get("content", "")
+            image_url = image.get(
+                "content",
+                ""
+            )
 
     # Extract useful page text
     paragraphs = []
 
     for p in soup.find_all("p"):
-        text = clean_text(p.get_text(" ", strip=True))
+
+        text = clean_text(
+            p.get_text(
+                " ",
+                strip=True
+            )
+        )
 
         if text and len(text) > 40:
             paragraphs.append(text)
 
-    page_text = "\n".join(paragraphs[:80])
+    page_text = "\n".join(
+        paragraphs[:80]
+    )
 
     return {
         "title": clean_text(title),
@@ -334,6 +383,7 @@ def get_article_page(url):
 # ============================================================
 
 def ask_gemini(story):
+
     endpoint = (
         "https://generativelanguage.googleapis.com/v1beta/"
         f"models/{GEMINI_MODEL}:generateContent"
@@ -355,6 +405,7 @@ IMPORTANT AUTOMATION RULES:
 8. Do not publish stories about rumours or unsupported claims.
 9. Return ONLY valid JSON.
 10. Do not wrap the JSON in Markdown fences.
+11. Do not include commentary outside the JSON object.
 
 SOURCE LEAD:
 
@@ -444,43 +495,112 @@ Do not add information that cannot be verified.
                 ]
             }
         ],
+
+        # Gemini 3.6 Flash supports Google Search grounding.
         "tools": [
             {
                 "google_search": {}
             }
         ],
+
         "generationConfig": {
-            "temperature": 0.2,
+            # Keep JSON output.
             "responseMimeType": "application/json"
         }
     }
 
-    response = requests.post(
-        endpoint,
-        params={"key": AI_API_KEY},
-        json=payload,
-        timeout=180
-    )
+    try:
 
-    response.raise_for_status()
+        response = requests.post(
+            endpoint,
+
+            # Use the API key in the request header.
+            # This is the recommended authentication style.
+            headers={
+                "x-goog-api-key": AI_API_KEY,
+                "Content-Type": "application/json"
+            },
+
+            json=payload,
+            timeout=180
+        )
+
+        response.raise_for_status()
+
+    except requests.exceptions.HTTPError as e:
+
+        try:
+            error_data = response.json()
+            error_message = json.dumps(
+                error_data,
+                ensure_ascii=False
+            )
+        except Exception:
+            error_message = response.text[:4000]
+
+        raise RuntimeError(
+            f"Gemini API HTTP error "
+            f"{response.status_code}:\n"
+            f"{error_message}"
+        ) from e
+
+    except requests.exceptions.RequestException as e:
+
+        raise RuntimeError(
+            f"Gemini API request failed: {e}"
+        ) from e
 
     data = response.json()
 
     try:
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
+
+        text = (
+            data["candidates"][0]
+            ["content"]["parts"][0]
+            ["text"]
+        )
+
     except Exception:
+
         raise RuntimeError(
-            "Gemini returned an unexpected response: "
-            + json.dumps(data)[:2000]
+            "Gemini returned an unexpected response:\n"
+            + json.dumps(
+                data,
+                ensure_ascii=False
+            )[:4000]
         )
 
     text = text.strip()
 
+    # Safety fallback in case JSON is returned inside Markdown.
     if text.startswith("```"):
-        text = re.sub(r"^```json\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
 
-    return json.loads(text)
+        text = re.sub(
+            r"^```json\s*",
+            "",
+            text,
+            flags=re.IGNORECASE
+        )
+
+        text = re.sub(
+            r"\s*```$",
+            "",
+            text
+        )
+
+    # Remove accidental leading/trailing whitespace.
+    text = text.strip()
+
+    try:
+
+        return json.loads(text)
+
+    except json.JSONDecodeError as e:
+
+        raise RuntimeError(
+            "Gemini returned invalid JSON.\n\n"
+            + text[:4000]
+        ) from e
 
 
 # ============================================================
@@ -488,15 +608,24 @@ Do not add information that cannot be verified.
 # ============================================================
 
 def wp_auth():
-    return (WP_USERNAME, WP_APP_PASSWORD)
+    return (
+        WP_USERNAME,
+        WP_APP_PASSWORD
+    )
 
 
-def upload_image(image_url, filename, alt_text):
+def upload_image(
+    image_url,
+    filename,
+    alt_text
+):
+
     response = requests.get(
         image_url,
         timeout=60,
         headers={
-            "User-Agent": "AustraliaByAussie-Newsroom/1.0"
+            "User-Agent":
+                "AustraliaByAussie-Newsroom/1.0"
         }
     )
 
@@ -510,15 +639,22 @@ def upload_image(image_url, filename, alt_text):
     if "image" not in content_type:
         content_type = "image/jpeg"
 
-    media_endpoint = f"{WP_URL}/wp-json/wp/v2/media"
+    media_endpoint = (
+        f"{WP_URL}/wp-json/wp/v2/media"
+    )
 
     upload = requests.post(
         media_endpoint,
         auth=wp_auth(),
+
         headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Content-Type": content_type
+            "Content-Disposition":
+                f'attachment; filename="{filename}"',
+
+            "Content-Type":
+                content_type
         },
+
         data=response.content,
         timeout=90
     )
@@ -530,24 +666,35 @@ def upload_image(image_url, filename, alt_text):
     media_id = media["id"]
 
     # Update image metadata
-    requests.post(
+    metadata_response = requests.post(
         f"{media_endpoint}/{media_id}",
         auth=wp_auth(),
+
         json={
             "alt_text": alt_text
         },
+
         timeout=30
     )
+
+    metadata_response.raise_for_status()
 
     return media_id
 
 
-def publish_post(content, featured_media):
-    endpoint = f"{WP_URL}/wp-json/wp/v2/posts"
+def publish_post(
+    content,
+    featured_media
+):
+
+    endpoint = (
+        f"{WP_URL}/wp-json/wp/v2/posts"
+    )
 
     response = requests.post(
         endpoint,
         auth=wp_auth(),
+
         json={
             "title": content["headline"],
             "content": content["article_html"],
@@ -555,6 +702,7 @@ def publish_post(content, featured_media):
             "status": "publish",
             "featured_media": featured_media
         },
+
         timeout=90
     )
 
@@ -568,22 +716,62 @@ def publish_post(content, featured_media):
 # ============================================================
 
 def count_words(text):
-    return re.findall(r"\b[\w’'-]+\b", text, flags=re.UNICODE)
+
+    return re.findall(
+        r"\b[\w’'-]+\b",
+        text,
+        flags=re.UNICODE
+    )
 
 
 def validate_story(result):
-    website = result.get("website", {})
-    social = result.get("social", {})
-    video = result.get("video", {})
+
+    website = result.get(
+        "website",
+        {}
+    )
+
+    social = result.get(
+        "social",
+        {}
+    )
+
+    video = result.get(
+        "video",
+        {}
+    )
 
     errors = []
 
-    headline = website.get("headline", "")
-    excerpt = website.get("excerpt", "")
-    tag = website.get("tag", "")
-    category = website.get("category", "")
-    facebook = social.get("english", "")
-    hashtags = video.get("hashtags", [])
+    headline = website.get(
+        "headline",
+        ""
+    )
+
+    excerpt = website.get(
+        "excerpt",
+        ""
+    )
+
+    tag = website.get(
+        "tag",
+        ""
+    )
+
+    category = website.get(
+        "category",
+        ""
+    )
+
+    facebook = social.get(
+        "english",
+        ""
+    )
+
+    hashtags = video.get(
+        "hashtags",
+        []
+    )
 
     allowed_categories = {
         "Australia",
@@ -597,35 +785,62 @@ def validate_story(result):
     }
 
     if len(headline.split()) > 9:
-        errors.append("Headline exceeds 9 words.")
+
+        errors.append(
+            "Headline exceeds 9 words."
+        )
 
     if len(count_words(excerpt)) != 25:
+
         errors.append(
-            f"Excerpt is not exactly 25 words: {len(count_words(excerpt))}"
+            "Excerpt is not exactly 25 words: "
+            f"{len(count_words(excerpt))}"
         )
 
     if not tag:
-        errors.append("Missing WordPress tag.")
+
+        errors.append(
+            "Missing WordPress tag."
+        )
 
     if category not in allowed_categories:
-        errors.append(f"Invalid category: {category}")
+
+        errors.append(
+            f"Invalid category: {category}"
+        )
 
     if len(facebook) > 2000:
+
         errors.append(
-            f"Facebook post exceeds 2,000 characters: {len(facebook)}"
+            "Facebook post exceeds 2,000 "
+            f"characters: {len(facebook)}"
         )
 
     if "👉 Have Your Say" not in facebook:
-        errors.append("Facebook post is missing Have Your Say.")
+
+        errors.append(
+            "Facebook post is missing "
+            "Have Your Say."
+        )
 
     if len(hashtags) != 3:
-        errors.append("Hashtag count is not exactly 3.")
+
+        errors.append(
+            "Hashtag count is not exactly 3."
+        )
 
     if "#AustraliaByAussies" not in hashtags:
-        errors.append("Missing #AustraliaByAussies.")
+
+        errors.append(
+            "Missing #AustraliaByAussies."
+        )
 
     if errors:
-        raise ValueError("Validation failed:\n" + "\n".join(errors))
+
+        raise ValueError(
+            "Validation failed:\n"
+            + "\n".join(errors)
+        )
 
 
 # ============================================================
@@ -634,26 +849,54 @@ def validate_story(result):
 
 def main():
 
-    print("==============================================")
-    print("Australia By Aussie Automated Newsroom")
-    print("==============================================")
+    print(
+        "=============================================="
+    )
+
+    print(
+        "Australia By Aussie Automated Newsroom"
+    )
+
+    print(
+        "=============================================="
+    )
+
+    print(
+        "Gemini model:",
+        GEMINI_MODEL
+    )
 
     state = load_state()
-    processed = set(state.get("processed", []))
 
-    print("Checking Guardian Australia RSS...")
+    processed = set(
+        state.get(
+            "processed",
+            []
+        )
+    )
+
+    print(
+        "Checking Guardian Australia RSS..."
+    )
 
     feed = get_feed()
 
     if not feed.entries:
-        print("No Guardian stories found.")
+
+        print(
+            "No Guardian stories found."
+        )
+
         return
 
     candidates = []
 
     for entry in feed.entries[:25]:
 
-        url = entry.get("link", "").strip()
+        url = entry.get(
+            "link",
+            ""
+        ).strip()
 
         if not url:
             continue
@@ -663,21 +906,40 @@ def main():
         if key in processed:
             continue
 
-        title = clean_text(entry.get("title", ""))
-        description = clean_text(entry.get("summary", ""))
+        title = clean_text(
+            entry.get(
+                "title",
+                ""
+            )
+        )
 
-        candidates.append({
-            "id": key,
-            "url": url,
-            "title": title,
-            "description": description
-        })
+        description = clean_text(
+            entry.get(
+                "summary",
+                ""
+            )
+        )
+
+        candidates.append(
+            {
+                "id": key,
+                "url": url,
+                "title": title,
+                "description": description
+            }
+        )
 
     if not candidates:
-        print("No new stories.")
+
+        print(
+            "No new stories."
+        )
+
         return
 
-    print(f"Found {len(candidates)} new candidates.")
+    print(
+        f"Found {len(candidates)} new candidates."
+    )
 
     # Process only one story per run.
     # This prevents excessive API usage.
@@ -686,64 +948,147 @@ def main():
     print("Selected:")
     print(story["title"])
 
-    print("Opening source page...")
+    print(
+        "Opening source page..."
+    )
 
-    page = get_article_page(story["url"])
+    page = get_article_page(
+        story["url"]
+    )
 
     story.update(page)
 
-    if not story.get("image_url"):
-        print("No image found. Skipping story.")
-        processed.add(story["id"])
-        state["processed"] = list(processed)
+    if not story.get(
+        "image_url"
+    ):
+
+        print(
+            "No image found. Skipping story."
+        )
+
+        processed.add(
+            story["id"]
+        )
+
+        state["processed"] = list(
+            processed
+        )
+
         save_state(state)
+
         return
 
     print("Image found.")
-    print(story["image_url"])
 
-    print("Sending story to Gemini + Google Search...")
+    print(
+        story["image_url"]
+    )
 
-    result = ask_gemini(story)
+    print(
+        "Sending story to Gemini + Google Search..."
+    )
 
-    verification = result.get("verification", {})
-    status = verification.get("status", "")
+    result = ask_gemini(
+        story
+    )
 
-    print("Verification status:", status)
+    verification = result.get(
+        "verification",
+        {}
+    )
 
-    if not result.get("publish", False):
-        print("Story was not approved for publishing.")
-        processed.add(story["id"])
-        state["processed"] = list(processed)
+    status = verification.get(
+        "status",
+        ""
+    )
+
+    print(
+        "Verification status:",
+        status
+    )
+
+    if not result.get(
+        "publish",
+        False
+    ):
+
+        print(
+            "Story was not approved for publishing."
+        )
+
+        processed.add(
+            story["id"]
+        )
+
+        state["processed"] = list(
+            processed
+        )
+
         save_state(state)
+
         return
 
-    if status == "INSUFFICIENT VERIFIED INFORMATION":
-        print("Insufficient verified information. Not publishing.")
-        processed.add(story["id"])
-        state["processed"] = list(processed)
+    if status == (
+        "INSUFFICIENT VERIFIED INFORMATION"
+    ):
+
+        print(
+            "Insufficient verified information. "
+            "Not publishing."
+        )
+
+        processed.add(
+            story["id"]
+        )
+
+        state["processed"] = list(
+            processed
+        )
+
         save_state(state)
+
         return
 
-    validate_story(result)
+    validate_story(
+        result
+    )
 
     website = result["website"]
 
-    print("Uploading source image to WordPress...")
+    print(
+        "Uploading source image to WordPress..."
+    )
 
     extension = ".jpg"
 
-    content_type = requests.head(
-        story["image_url"],
-        timeout=30,
-        headers={
-            "User-Agent": "AustraliaByAussie-Newsroom/1.0"
-        }
-    ).headers.get("Content-Type", "")
+    try:
 
-    if "png" in content_type:
+        head_response = requests.head(
+            story["image_url"],
+            timeout=30,
+            headers={
+                "User-Agent":
+                    "AustraliaByAussie-Newsroom/1.0"
+            },
+
+            allow_redirects=True
+        )
+
+        content_type = head_response.headers.get(
+            "Content-Type",
+            ""
+        )
+
+    except Exception:
+
+        content_type = ""
+
+    if "png" in content_type.lower():
+
         extension = ".png"
-    elif "webp" in content_type:
+
+    elif "webp" in content_type.lower():
+
         extension = ".webp"
 
     filename = (
@@ -751,7 +1096,9 @@ def main():
             r"[^a-zA-Z0-9]+",
             "-",
             website["headline"]
-        ).strip("-").lower()
+        )
+        .strip("-")
+        .lower()
         + extension
     )
 
@@ -761,30 +1108,77 @@ def main():
         website["alt_text"]
     )
 
-    print("Image uploaded. Media ID:", media_id)
+    print(
+        "Image uploaded. Media ID:",
+        media_id
+    )
 
-    print("Publishing WordPress article...")
+    print(
+        "Publishing WordPress article..."
+    )
 
     post = publish_post(
         website,
         media_id
     )
 
-    print("==============================================")
-    print("PUBLISHED SUCCESSFULLY")
-    print("==============================================")
-    print("Title:", post.get("title", {}).get("rendered"))
-    print("URL:", post.get("link"))
-    print("Post ID:", post.get("id"))
+    print(
+        "=============================================="
+    )
 
-    processed.add(story["id"])
+    print(
+        "PUBLISHED SUCCESSFULLY"
+    )
 
-    state["processed"] = list(processed)
-    state["last_run"] = datetime.now(timezone.utc).isoformat()
+    print(
+        "=============================================="
+    )
 
-    save_state(state)
+    print(
+        "Title:",
+        post.get(
+            "title",
+            {}
+        ).get(
+            "rendered"
+        )
+    )
 
-    print("Newsroom state saved.")
+    print(
+        "URL:",
+        post.get(
+            "link"
+        )
+    )
+
+    print(
+        "Post ID:",
+        post.get(
+            "id"
+        )
+    )
+
+    processed.add(
+        story["id"]
+    )
+
+    state["processed"] = list(
+        processed
+    )
+
+    state["last_run"] = (
+        datetime.now(
+            timezone.utc
+        ).isoformat()
+    )
+
+    save_state(
+        state
+    )
+
+    print(
+        "Newsroom state saved."
+    )
 
 
 if __name__ == "__main__":

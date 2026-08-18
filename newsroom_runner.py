@@ -1,6 +1,5 @@
 import os, re, json, time, hashlib
 from datetime import datetime, timezone, timedelta
-from urllib.parse import quote_plus
 import requests, feedparser
 from bs4 import BeautifulSoup
 
@@ -18,9 +17,12 @@ validate_story = ns["validate_story"]
 upload_image = ns["upload_image"]
 publish_post = ns["publish_post"]
 
-GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
-MIN_AGE = timedelta(hours=24)
-MAX_AGE = timedelta(days=14)
+GUARDIAN_RSS_FEEDS = [
+    "https://www.theguardian.com/australia-news/rss",
+    "https://www.theguardian.com/australia-news/australia-news/rss",
+]
+MIN_AGE = timedelta(seconds=0)
+MAX_AGE = timedelta(hours=24)
 
 
 def parse_entry_time(entry):
@@ -31,57 +33,37 @@ def parse_entry_time(entry):
     return None
 
 
-def resolve_guardian_url(url):
-    try:
-        r = requests.get(
-            url,
-            timeout=20,
-            headers={"User-Agent": "AustraliaByAussie-Newsroom/1.0"},
-            allow_redirects=True,
-        )
-        if "theguardian.com/australia-news/" in r.url:
-            return r.url
-    except Exception:
-        pass
-    return url
-
-
-def discover_old_guardian_stories():
+def discover_guardian_stories_last_24h():
     now = datetime.now(timezone.utc)
     candidates = {}
-    queries = [
-        "site:theguardian.com/australia-news Australia",
-        "site:theguardian.com/australia-news politics Australia",
-        "site:theguardian.com/australia-news business Australia",
-        "site:theguardian.com/australia-news cost of living Australia",
-        "site:theguardian.com/australia-news crime courts Australia",
-    ]
 
-    for query in queries:
-        url = f"{GOOGLE_NEWS_RSS}?q={quote_plus(query)}&hl=en-AU&gl=AU&ceid=AU:en"
+    for feed_url in GUARDIAN_RSS_FEEDS:
         try:
             response = requests.get(
-                url,
+                feed_url,
                 timeout=30,
                 headers={"User-Agent": "AustraliaByAussie-Newsroom/1.0"},
             )
             response.raise_for_status()
             feed = feedparser.parse(response.content)
         except Exception as exc:
-            print("Google News discovery failed:", exc)
+            print("Guardian RSS discovery failed:", exc)
             continue
 
-        for entry in feed.entries[:25]:
+        for entry in feed.entries:
             published = parse_entry_time(entry)
             if not published:
                 continue
+
             age = now - published
             if age < MIN_AGE or age > MAX_AGE:
                 continue
 
             title = clean_text(entry.get("title", ""))
-            link = resolve_guardian_url(entry.get("link", "").strip())
-            if not title or "theguardian.com/australia-news/" not in link:
+            link = entry.get("link", "").strip()
+            if not title or not link:
+                continue
+            if "theguardian.com/australia-news/" not in link:
                 continue
 
             key = article_id(link)
@@ -129,12 +111,12 @@ def image_extension(url):
 def run_one():
     state = load_state()
     processed = set(state.get("processed", []))
-    candidates = discover_old_guardian_stories()
-    print(f"Found {len(candidates)} Guardian candidates aged 24h+ and <=14d.")
+    candidates = discover_guardian_stories_last_24h()
+    print(f"Found {len(candidates)} Guardian Australia candidates from the last 24 hours.")
 
     story = next((c for c in candidates if c["id"] not in processed), None)
     if not story:
-        raise RuntimeError("NO_PUBLICATION: No eligible unprocessed Guardian story found.")
+        raise RuntimeError("NO_PUBLICATION: No eligible unprocessed Guardian Australia story from the last 24 hours was found.")
 
     print("Selected:", story["title"])
     page = ns["get_article_page"](story["url"])

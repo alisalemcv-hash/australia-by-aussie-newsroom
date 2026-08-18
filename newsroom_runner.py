@@ -1,4 +1,4 @@
-import os, re, json, time, hashlib
+import os, re, json
 from datetime import datetime, timezone, timedelta
 from urllib.parse import quote_plus
 import requests, feedparser
@@ -33,17 +33,12 @@ def parse_entry_time(entry):
 
 def resolve_guardian_url(url):
     try:
-        r = requests.get(
-            url,
-            timeout=20,
-            headers={"User-Agent": "AustraliaByAussie-Newsroom/1.0"},
-            allow_redirects=True,
-        )
-        if "theguardian.com/australia-news/" in r.url:
-            return r.url
+        r = requests.get(url, timeout=20,
+                         headers={"User-Agent": "AustraliaByAussie-Newsroom/1.0"},
+                         allow_redirects=True)
+        return r.url if "theguardian.com/australia-news/" in r.url else url
     except Exception:
-        pass
-    return url
+        return url
 
 
 def discover_old_guardian_stories():
@@ -58,16 +53,10 @@ def discover_old_guardian_stories():
     ]
 
     for query in queries:
-        url = (
-            f"{GOOGLE_NEWS_RSS}?q={quote_plus(query)}"
-            "&hl=en-AU&gl=AU&ceid=AU:en"
-        )
+        url = f"{GOOGLE_NEWS_RSS}?q={quote_plus(query)}&hl=en-AU&gl=AU&ceid=AU:en"
         try:
-            response = requests.get(
-                url,
-                timeout=30,
-                headers={"User-Agent": "AustraliaByAussie-Newsroom/1.0"},
-            )
+            response = requests.get(url, timeout=30,
+                                    headers={"User-Agent": "AustraliaByAussie-Newsroom/1.0"})
             response.raise_for_status()
             feed = feedparser.parse(response.content)
         except Exception as exc:
@@ -81,69 +70,14 @@ def discover_old_guardian_stories():
             age = now - published
             if age < MIN_AGE or age > MAX_AGE:
                 continue
-
             title = clean_text(entry.get("title", ""))
             link = resolve_guardian_url(entry.get("link", "").strip())
             if not title or "theguardian.com/australia-news/" not in link:
                 continue
-
             key = article_id(link)
-            candidates[key] = {
-                "id": key,
-                "url": link,
-                "title": title,
-                "published": published,
-            }
+            candidates[key] = {"id": key, "url": link, "title": title, "published": published}
 
     return sorted(candidates.values(), key=lambda item: item["published"], reverse=True)
-
-
-def find_reusable_image(query):
-    """Use only a separately reusable image; never strip Guardian branding/watermarks."""
-    api = "https://commons.wikimedia.org/w/api.php"
-    params = {
-        "action": "query",
-        "generator": "search",
-        "gsrsearch": query,
-        "gsrnamespace": 6,
-        "gsrlimit": 10,
-        "prop": "imageinfo",
-        "iiprop": "url|extmetadata",
-        "iiurlwidth": 1600,
-        "format": "json",
-    }
-    try:
-        response = requests.get(
-            api,
-            params=params,
-            timeout=30,
-            headers={"User-Agent": "AustraliaByAussie-Newsroom/1.0"},
-        )
-        response.raise_for_status()
-        pages = response.json().get("query", {}).get("pages", {}).values()
-    except Exception as exc:
-        print("Wikimedia Commons search failed:", exc)
-        return None
-
-    for page in pages:
-        info = (page.get("imageinfo") or [{}])[0]
-        meta = info.get("extmetadata") or {}
-        license_name = clean_text(meta.get("LicenseShortName", {}).get("value", ""))
-        license_lower = license_name.lower()
-        if any(term in license_lower for term in ("noncommercial", "no derivatives")):
-            continue
-
-        image_url = info.get("thumburl") or info.get("url")
-        if not image_url or not image_url.startswith(("http://", "https://")):
-            continue
-
-        return {
-            "url": image_url,
-            "title": clean_text(page.get("title", "")).replace("File:", "", 1),
-            "author": clean_text(meta.get("Artist", {}).get("value", "")),
-            "license": license_name or "See Wikimedia Commons file page",
-        }
-    return None
 
 
 def exact_25_word_excerpt(result):
@@ -152,22 +86,21 @@ def exact_25_word_excerpt(result):
     words = re.findall(r"\b[\w’'-]+\b", excerpt, flags=re.UNICODE)
     if len(words) == 25:
         return
-
-    article = BeautifulSoup(
-        website.get("article_html", ""), "html.parser"
-    ).get_text(" ", strip=True)
+    article = BeautifulSoup(website.get("article_html", ""), "html.parser").get_text(" ", strip=True)
     article_words = re.findall(r"\b[\w’'-]+\b", article, flags=re.UNICODE)
-
     if len(words) > 25:
         website["excerpt"] = " ".join(words[:25])
-        return
+    else:
+        website["excerpt"] = " ".join((words + article_words)[:25])
 
-    combined = words[:]
-    for word in article_words:
-        if len(combined) >= 25:
-            break
-        combined.append(word)
-    website["excerpt"] = " ".join(combined[:25])
+
+def image_extension(url):
+    lower = url.lower().split("?", 1)[0]
+    if lower.endswith(".png"):
+        return ".png"
+    if lower.endswith(".webp"):
+        return ".webp"
+    return ".jpg"
 
 
 def run_one():
@@ -176,10 +109,7 @@ def run_one():
     candidates = discover_old_guardian_stories()
     print(f"Found {len(candidates)} Guardian candidates aged 24h+ and <=14d.")
 
-    story = next(
-        (candidate for candidate in candidates if candidate["id"] not in processed),
-        None,
-    )
+    story = next((c for c in candidates if c["id"] not in processed), None)
     if not story:
         print("No eligible unprocessed Guardian story found.")
         return False
@@ -191,11 +121,11 @@ def run_one():
         return False
     story.update(page)
 
-    image = find_reusable_image(story["title"])
-    if not image:
-        print("No verified reusable image found. Skipping story safely.")
+    image_url = story.get("image_url", "").strip()
+    if not image_url:
+        print("No Guardian image found. Skipping.")
         return False
-    print("Reusable image:", image["url"])
+    print("Guardian image found:", image_url)
 
     sources = collect_sources(story)
     result = ask_openrouter(story, sources)
@@ -205,50 +135,26 @@ def run_one():
 
     if not result.get("publish", False) or status == "INSUFFICIENT VERIFIED INFORMATION":
         print("Story not approved for publishing.")
-        processed.add(story["id"])
-        state["processed"] = list(processed)
-        save_state(state)
         return False
 
-    # Repair the deterministic 25-word requirement before final validation.
     exact_25_word_excerpt(result)
     validate_story(result)
     website = result["website"]
 
-    website["alt_text"] = (
-        f"{website.get('alt_text', '').strip()} "
-        "(illustrative image from Wikimedia Commons)"
-    ).strip()
-    website["caption"] = (
-        f"Illustrative image: {image['title']}. "
-        f"Source: Wikimedia Commons; licence: {image['license']}."
-    )
-    website["description"] = (
-        "Illustrative image used under the stated Wikimedia Commons licence. "
-        f"Creator: {image['author'] or 'as credited on the source page'}."
-    )
+    # Use the Guardian source image as supplied. Never crop, erase, or remove branding/watermarks.
+    filename = re.sub(r"[^a-zA-Z0-9]+", "-", website["headline"]).strip("-").lower() + image_extension(image_url)
+    media_id = upload_image(image_url, filename, website["alt_text"])
+    print("Image uploaded. Media ID:", media_id)
 
-    extension = ".jpg"
-    lower_url = image["url"].lower()
-    if ".png" in lower_url:
-        extension = ".png"
-    elif ".webp" in lower_url:
-        extension = ".webp"
-
-    filename = (
-        re.sub(r"[^a-zA-Z0-9]+", "-", website["headline"])
-        .strip("-")
-        .lower()
-        + extension
-    )
-
-    media_id = upload_image(image["url"], filename, website["alt_text"])
     post = publish_post(website, media_id)
+    post_id = post.get("id")
+    if not post_id:
+        raise RuntimeError("WordPress returned no post ID after publish request.")
 
     print("PUBLISHED SUCCESSFULLY")
     print("Title:", post.get("title", {}).get("rendered"))
     print("URL:", post.get("link"))
-    print("Post ID:", post.get("id"))
+    print("Post ID:", post_id)
 
     processed.add(story["id"])
     state["processed"] = list(processed)

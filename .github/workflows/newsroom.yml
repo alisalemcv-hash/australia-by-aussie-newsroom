@@ -31,7 +31,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install --disable-pip-version-check requests feedparser beautifulsoup4
 
-      - name: Configure resilient OpenRouter fallback
+      - name: Configure resilient OpenRouter fallback and validation repair
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -58,9 +58,47 @@ jobs:
               raise SystemExit("Expected OpenRouter provider configuration was not found; refusing to run with an unknown newsroom.py version.")
           s = s.replace(old_provider, new_provider, 1)
 
+          repair_function = r'''
+
+def repair_exact_excerpt(result, story):
+    """Guarantee the website excerpt contains exactly 25 English words.
+
+    Models sometimes miss a hard word-count constraint even when JSON schema
+    validation succeeds. Repair the prose deterministically from the model
+    excerpt first, then the verified Guardian description/article text.
+    """
+    website = result.get("website", {})
+    excerpt = clean_text(website.get("excerpt", ""))
+    if len(count_english_words(excerpt)) == 25:
+        website["excerpt"] = excerpt
+        return
+
+    source_parts = [excerpt, story.get("description", ""), story.get("text", ""), story.get("title", "")]
+    source = clean_text(" ".join(part for part in source_parts if part))
+    words = count_english_words(source)
+    if len(words) < 25:
+        raise ValueError("Unable to deterministically construct a 25-word excerpt from supplied source material")
+
+    website["excerpt"] = " ".join(words[:25])
+    print("Excerpt repaired automatically to exactly 25 English words.")
+'''
+
+          marker = '\ndef validate_story(story):\n'
+          if 'def repair_exact_excerpt(result, story):' not in s:
+              if marker not in s:
+                  raise SystemExit("validate_story marker not found; refusing to patch unknown newsroom.py version.")
+              s = s.replace(marker, repair_function + marker, 1)
+
+          old_validate = '        validate_story(result)\n'
+          new_validate = '        repair_exact_excerpt(result, story)\n        validate_story(result)\n'
+          if old_validate not in s:
+              raise SystemExit("validate_story call not found; refusing to patch unknown newsroom.py version.")
+          s = s.replace(old_validate, new_validate, 1)
+
           p.write_text(s, encoding="utf-8")
           print("OpenRouter configured: free router -> Nemotron 3 Ultra -> Gemma 4 26B -> GPT-OSS 20B")
-          print("Response Healing enabled for malformed JSON recovery")
+          print("Response Healing enabled")
+          print("Exact 25-word excerpt repair enabled")
           PY
 
       - name: Run Australia By Aussie Newsroom
@@ -73,7 +111,7 @@ jobs:
 
       - name: Save newsroom state
         run: |
-          git config user.name "Australia By Aussie Newsroom"
+          git config user.name "Australia By Aussie Newsroom Newsroom"
           git config user.email "newsroom@australiabyaussie.com"
           git add state.json
           if git diff --cached --quiet; then

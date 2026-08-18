@@ -48,10 +48,10 @@ jobs:
               "openrouter/free"
           ]'''
           new = '''OPENROUTER_MODELS = [
-              "openrouter/free",
-              "nvidia/nemotron-3-ultra-550b-a55b:free",
+              "openai/gpt-oss-20b:free",
+              "google/gemma-4-31b:free",
               "google/gemma-4-26b-a4b-it:free",
-              "openai/gpt-oss-20b:free"
+              "openrouter/free"
           ]'''
           if old not in s:
               raise SystemExit("Expected OpenRouter model list was not found; refusing to run with an unknown newsroom.py version.")
@@ -62,6 +62,10 @@ jobs:
           if old_provider not in s:
               raise SystemExit("Expected OpenRouter provider configuration was not found; refusing to run with an unknown newsroom.py version.")
           s = s.replace(old_provider, new_provider, 1)
+
+          old_reasoning = '            "reasoning": {"effort": "low", "exclude": True},\n'
+          if old_reasoning in s:
+              s = s.replace(old_reasoning, '', 1)
 
           repair_function = r'''
 
@@ -96,8 +100,9 @@ def repair_exact_excerpt(result, story):
           s = s.replace(old_validate, new_validate, 1)
 
           p.write_text(s, encoding="utf-8")
-          print("OpenRouter configured: free router -> Nemotron 3 Ultra -> Gemma 4 26B -> GPT-OSS 20B")
+          print("OpenRouter fallback: GPT-OSS 20B -> Gemma 4 31B -> Gemma 4 26B -> free router")
           print("Response Healing enabled")
+          print("Provider fallbacks enabled")
           print("Exact 25-word excerpt repair enabled")
           PY
 

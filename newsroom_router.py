@@ -110,10 +110,10 @@ def run():
     candidates = [x for x in discover() if x["id"] not in processed]
     print(f"Unique unprocessed candidates: {len(candidates)}")
     if not candidates:
-        print("RUN COMPLETE: no new stories.")
-        return True
+        raise RuntimeError("NO_PUBLICATION: No new unprocessed Australian stories were found in the last 24 hours.")
 
     published = 0
+    failures = []
     for story in candidates:
         if published >= MAX_POSTS:
             break
@@ -140,22 +140,35 @@ def run():
             media_id = base.upload_external_image(image_url, filename, website["alt_text"], image_credit)
             post = base.publish_post(website, media_id)
             if not post.get("id") or post.get("status") != "publish":
-                raise RuntimeError(f"WORDPRESS_PUBLISH_FAILED: {post.get('id')} {post.get('status')}")
+                raise RuntimeError(f"WORDPRESS_PUBLISH_FAILED: WordPress did not confirm publish. id={post.get('id')!r}, status={post.get('status')!r}")
             print("PUBLISHED SUCCESSFULLY")
             print("SOURCE:", story["source"])
             print("CATEGORY:", website.get("category"))
             print("IMAGE:", image_credit)
             print("URL:", post.get("link"))
+            print("POST ID:", post.get("id"))
             processed.add(story["id"])
             published += 1
             state["processed"] = list(processed)
             state["last_run"] = datetime.now(timezone.utc).isoformat()
             base.save_state(state)
         except Exception as exc:
+            message = f"{story['title']} -> {exc}"
+            failures.append(message)
             print("SKIPPED:", story["title"])
             print("Reason:", exc)
             continue
+
+    print("============================================================")
     print(f"RUN COMPLETE: published {published}/{MAX_POSTS} articles.")
+    print(f"FAILED/SKIPPED: {len(failures)}")
+    for failure in failures:
+        print("FAILURE:", failure)
+
+    # Never report a fake GitHub Actions Success when nothing reached WordPress.
+    if published == 0:
+        raise RuntimeError("NO_PUBLICATION: 0 articles were confirmed published to WordPress. See FAILURE lines above.")
+
     return True
 
 

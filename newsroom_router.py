@@ -11,11 +11,12 @@ SBS_RSS = "https://www.sbs.com.au/news/topic/australia/feed"
 BUCKETS = [1, 2, 3, 4, 6, 8, 12, 18, 24]
 MAX_AGE = timedelta(hours=24)
 MAX_POSTS = 2
+ALLOWED_CATEGORIES = {"Australia", "Politics", "Business", "Cost of Living", "Life", "World", "Finance"}
 
 ROUTER_PROMPT = r"""You are the senior journalist and fact-checker for Australia By Aussie.
 Write natural Australian English only. Publish Australian news only. The lead may come from Guardian Australia or SBS News Australia; write a completely original article and never invent facts or quotes.
 Choose exactly one category: Australia, Politics, Business, Cost of Living, Life, World, Finance. Politics normally applies to Albanese, ministers, cabinet, parliament, federal policy, Labor/Coalition and political disputes.
-The runner will attach a separate clean Wikimedia Commons image. Never use Guardian/SBS images, publisher logos, watermarks, screenshots, social cards, infographics or images containing overlaid text.
+The runner will attach a separate clean image. Never use Guardian/SBS images, publisher logos, watermarks, screenshots, social cards, infographics or images containing overlaid text.
 Return valid JSON only."""
 
 
@@ -81,7 +82,6 @@ def priority_score(story):
 
 
 def discover(processed=None):
-    """Discover fresh stories, excluding processed IDs before time-bucket selection."""
     processed = processed or set()
     items = feed_candidates(GUARDIAN_RSS, "Guardian Australia") + feed_candidates(SBS_RSS, "SBS News Australia")
     items.sort(key=lambda x: x["published"], reverse=True)
@@ -106,6 +106,91 @@ def discover(processed=None):
             if len(selected) >= MAX_POSTS:
                 return selected
     return selected
+
+
+def _english_words(text):
+    text = re.sub(r"<[^>]+>", " ", str(text or ""))
+    return re.findall(r"\b[A-Za-z]+(?:['’-][A-Za-z]+)*\b", text)
+
+
+def repair_model_output(result):
+    """Deterministically repair mechanical fields before final validation.
+
+    This prevents a good article from being discarded because a free model counted
+    the excerpt incorrectly or omitted one of the required hashtags.
+    """
+    website = result.setdefault("website", {})
+    social = result.setdefault("social", {})
+    video = result.setdefault("video", {})
+
+    # Exact 25-word excerpt. If the model misses the count, derive it from the
+    # article itself rather than inventing a sentence.
+    words = _english_words(website.get("article_html", ""))
+    if len(words) >= 25:
+        website["excerpt"] = " ".join(words[:25])
+
+    # Exactly three hashtags, always including the site tag.
+    category_tags = {
+        "Politics": "#AustralianPolitics",
+        "Business": "#AustralianBusiness",
+        "Finance": "#AustralianFinance",
+        "Cost of Living": "#CostOfLiving",
+        "Life": "#LifeInAustralia",
+        "World": "#AustraliaNews",
+        "Australia": "#AustraliaNews",
+    }
+    preferred = category_tags.get(website.get("category"), "#AustraliaNews")
+    existing = [h.strip() for h in video.get("hashtags", []) if isinstance(h, str) and h.strip()]
+    hashtags = []
+    for h in ["#AustraliaByAussies", preferred] + existing:
+        if h not in hashtags:
+            hashtags.append(h)
+    if len(hashtags) < 3:
+        for h in ("#AustralianNews", "#NewsAustralia", "#Australia"):
+            if h not in hashtags:
+                hashtags.append(h)
+            if len(hashtags) == 3:
+                break
+    video["hashtags"] = hashtags[:3]
+
+    # Keep the required engagement ending deterministic.
+    facebook = social.get("english", "")
+    if "👉 Have Your Say" not in facebook:
+        facebook = facebook.rstrip() + "\n\n👉 Have Your Say\nDo you support this? YES or NO?"
+    social["english"] = facebook[:2000]
+    return result
+
+
+def validate_publishable(result):
+    website = result.get("website", {})
+    social = result.get("social", {})
+    video = result.get("video", {})
+    errors = []
+
+    headline_words = len(str(website.get("headline", "")).split())
+    excerpt_count = len(_english_words(website.get("excerpt", "")))
+    hashtags = video.get("hashtags", [])
+    category = str(website.get("category", "")).strip()
+    facebook = str(social.get("english", ""))
+
+    if headline_words > 9:
+        errors.append(f"Headline exceeds 9 words: {headline_words}")
+    if excerpt_count != 25:
+        errors.append(f"Excerpt is not exactly 25 English words: {excerpt_count}")
+    if not website.get("tag", "").strip():
+        errors.append("Missing WordPress tag")
+    if category not in ALLOWED_CATEGORIES:
+        errors.append(f"Invalid category: {category}")
+    if len(facebook) > 2000:
+        errors.append("Facebook post exceeds 2,000 characters")
+    if "👉 Have Your Say" not in facebook:
+        errors.append("Facebook post missing Have Your Say")
+    if len(hashtags) != 3:
+        errors.append(f"Hashtag count is not exactly 3: {len(hashtags)}")
+    if "#AustraliaByAussies" not in hashtags:
+        errors.append("Missing #AustraliaByAussies")
+    if errors:
+        raise ValueError("Validation failed:\n" + "\n".join(errors))
 
 
 def run():
@@ -137,7 +222,10 @@ def run():
             verification = result.get("verification", {})
             if not result.get("publish", False) or verification.get("status") == "INSUFFICIENT VERIFIED INFORMATION":
                 raise RuntimeError(f"NO_PUBLICATION: model approval failed: {verification.get('status')}")
-            base.validate_story(result)
+
+            result = repair_model_output(result)
+            validate_publishable(result)
+
             image_url, image_credit = base.choose_clean_image(story, result)
             website = result["website"]
             filename = re.sub(r"[^a-zA-Z0-9]+", "-", website["headline"]).strip("-").lower() + ".jpg"
@@ -171,7 +259,6 @@ def run():
 
     if published == 0:
         raise RuntimeError("NO_PUBLICATION: 0 articles were confirmed published to WordPress. See FAILURE lines above.")
-
     return True
 
 

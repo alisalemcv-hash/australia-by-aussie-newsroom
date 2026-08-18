@@ -1,5 +1,6 @@
 import os, re, json
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urljoin
 
 source = open("newsroom.py", "r", encoding="utf-8").read()
 ns = {"__name__": "newsroom_loaded"}
@@ -54,7 +55,10 @@ TAG:
 Exactly one relevant English WordPress tag.
 
 IMAGE:
-Use the supplied Guardian Australia image. The image must be clean and free of visible logos, watermarks, captions, or overlaid text where possible.
+The image supplied by the automation is a Guardian Australia article image selected from the article body.
+It must be a clean editorial photograph/illustration with NO visible Guardian logo, watermark, caption,
+overlaid text, publication branding, or social-media graphic.
+Do not add a Guardian logo or any source branding to the article.
 
 WEBSITE ARTICLE:
 Complete English article only.
@@ -72,8 +76,6 @@ Return valid JSON only.
 
 ns["MASTER_PROMPT"] = ENGLISH_ONLY_PROMPT
 
-# Priority is applied BEFORE the AI writes the article.
-# Higher score = publish earlier in the run.
 PRIORITY_RULES = [
     (120, ("anthony albanese", "albanese", "prime minister", "prime-minister")),
     (105, ("minister", "ministers", "cabinet", "ministerial")),
@@ -172,13 +174,112 @@ def clean_english_result(result):
     return result
 
 
+def select_clean_guardian_image(article_url, fallback_url=""):
+    """Choose an article-body image instead of Guardian's branded social/OG image.
+
+    Guardian's og:image can be a branded composite containing the Guardian logo.
+    We therefore inspect the actual article HTML and prefer editorial images inside
+    figure/article content. If no credible clean candidate exists, return empty so
+    the story is skipped rather than publishing a branded image.
+    """
+    import requests
+    from bs4 import BeautifulSoup
+
+    try:
+        response = requests.get(
+            article_url,
+            timeout=40,
+            headers={"User-Agent": "AustraliaByAussie-Newsroom/1.0"},
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        print("Guardian image-page request failed:", exc)
+        return ""
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    candidates = []
+    seen = set()
+
+    def add_candidate(url, node=None, priority=0):
+        if not url:
+            return
+        url = urljoin(article_url, url.strip())
+        if not url.startswith("https://") or url in seen:
+            return
+        low = url.lower()
+        if any(bad in low for bad in (
+            "/logo", "logo.", "/icon", "icon.", "/avatar", "/profile", "/newsletter",
+            "/podcast", "/audio", "/video/", "/interactive/", "facebook", "twitter", "instagram"
+        )):
+            return
+
+        text = ""
+        if node:
+            text = " ".join([
+                str(node.get("alt", "")),
+                str(node.get("title", "")),
+                str(node.get("aria-label", "")),
+            ]).lower()
+        if any(bad in text for bad in (
+            "guardian logo", "the guardian logo", "guardian masthead", "advertisement",
+            "newsletter", "social graphic", "caption graphic"
+        )):
+            return
+
+        width = 0
+        height = 0
+        if node:
+            try:
+                width = int(re.sub(r"[^0-9]", "", str(node.get("width", "0"))) or 0)
+                height = int(re.sub(r"[^0-9]", "", str(node.get("height", "0"))) or 0)
+            except Exception:
+                pass
+        if width and width < 500:
+            return
+        if height and height < 250:
+            return
+
+        seen.add(url)
+        candidates.append((priority, width * height, url))
+
+    # 1) Real article figures are preferred over metadata/social images.
+    for figure in soup.find_all("figure"):
+        for img in figure.find_all("img"):
+            src = img.get("src")
+            srcset = img.get("srcset", "")
+            if srcset:
+                parts = [p.strip().split(" ")[0] for p in srcset.split(",") if p.strip()]
+                for part in reversed(parts[:5]):
+                    add_candidate(part, img, priority=100)
+            add_candidate(src, img, priority=95)
+
+    # 2) Other article-body images.
+    for img in soup.find_all("img"):
+        add_candidate(img.get("src"), img, priority=70)
+        srcset = img.get("srcset", "")
+        if srcset:
+            parts = [p.strip().split(" ")[0] for p in srcset.split(",") if p.strip()]
+            for part in reversed(parts[:3]):
+                add_candidate(part, img, priority=65)
+
+    # Never fall back to Guardian's og:image: it is exactly the image that caused
+    # the branded-logo problem. No image is safer than a branded image.
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+
+    if candidates:
+        selected = candidates[0][2]
+        print("Selected clean Guardian article-body image:", selected)
+        return selected
+
+    print("No clean Guardian article-body image candidate found; skipping image.")
+    return ""
+
+
 def run_one():
     state = load_state()
     processed = set(state.get("processed", []))
     candidates = discover_guardian_stories_last_24h()
 
-    # First priority: Albanese / Prime Minister / ministers / cabinet / federal politics.
-    # Second priority: all other eligible Guardian Australia stories, newest first.
     for story in candidates:
         score, matched = priority_score(story)
         story["priority_score"] = score
@@ -216,10 +317,12 @@ def run_one():
                 raise RuntimeError("NO_PUBLICATION: Guardian Australia source page was unavailable.")
             story.update(page)
 
-            image_url = story.get("image_url", "").strip()
+            # IMPORTANT: do not use og:image/twitter:image. Those can be Guardian-branded
+            # composites. Select a real article-body image instead.
+            image_url = select_clean_guardian_image(story["url"])
             if not image_url:
-                raise RuntimeError("NO_PUBLICATION: No Guardian Australia source image was found.")
-            print("Guardian Australia image found:", image_url)
+                raise RuntimeError("NO_PUBLICATION: No clean Guardian Australia article-body image was found.")
+            story["image_url"] = image_url
 
             result = ask_openrouter_original(story, [])
             result = clean_english_result(result)
@@ -260,7 +363,6 @@ def run_one():
             published_count += 1
 
         except Exception as exc:
-            # One bad story must not stop the remaining nine slots in this run.
             print("SKIPPED CANDIDATE:", story["title"])
             print("Reason:", exc)
             continue
@@ -268,9 +370,6 @@ def run_one():
     print("============================================================")
     print(f"RUN COMPLETE: published {published_count}/{MAX_POSTS_PER_RUN} articles.")
     print(f"Attempted candidates: {attempted_count}")
-
-    # Do not fail the scheduled workflow just because there were fewer than 10
-    # eligible stories or one source/model response was rejected.
     return True
 
 

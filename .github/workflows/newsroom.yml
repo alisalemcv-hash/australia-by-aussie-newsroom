@@ -31,6 +31,27 @@ jobs:
           python -m pip install --upgrade pip
           pip install --disable-pip-version-check requests feedparser beautifulsoup4
 
+      - name: Select current OpenRouter model fallback
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("newsroom.py")
+          s = p.read_text(encoding="utf-8")
+          old = '''OPENROUTER_MODELS = [
+              "google/gemma-4-26b-a4b-it:free",
+              "openrouter/free"
+          ]'''
+          new = '''OPENROUTER_MODELS = [
+              "google/gemma-4-31b-it:free",
+              "openai/gpt-oss-120b:free",
+              "openrouter/free"
+          ]'''
+          if old not in s:
+              raise SystemExit("Expected OpenRouter model list was not found; refusing to run with an unknown configuration.")
+          p.write_text(s.replace(old, new, 1), encoding="utf-8")
+          print("OpenRouter model fallback configured: Gemma 4 31B -> GPT-OSS 120B -> free router")
+          PY
+
       - name: Run Australia By Aussie Newsroom
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

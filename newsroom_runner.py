@@ -7,6 +7,11 @@ from urllib.parse import urljoin, quote_plus
 import requests
 from bs4 import BeautifulSoup
 
+# newsroom.py is a shared helper module from the old OpenRouter version.
+# The active router uses Groq, so importing newsroom.py must not require an
+# OpenRouter secret to exist in GitHub Actions.
+os.environ.setdefault("OPENROUTER_API_KEY", "disabled")
+
 source = open("newsroom.py", "r", encoding="utf-8").read()
 ns = {"__name__": "newsroom_loaded"}
 exec(compile(source, "newsroom.py", "exec"), ns)
@@ -320,7 +325,6 @@ def choose_clean_image(story, result):
     This function intentionally does not return a Guardian branded social image.
     It also never makes image availability a reason to skip an otherwise approved story.
     """
-    # 1. Clean image embedded in the Guardian article.
     guardian = guardian_clean_images(story["url"])
     if guardian:
         print("IMAGE SOURCE: clean Guardian article-body image")
@@ -334,7 +338,6 @@ def choose_clean_image(story, result):
     ]
     query = " ".join(x for x in search_terms if x)[:240]
 
-    # 2. Wikimedia Commons: use the article headline/subject rather than a generic image.
     commons = wikimedia_images(query, limit=12)
     if not commons:
         commons = wikimedia_images(story.get("title", "Australia"), limit=12)
@@ -345,8 +348,6 @@ def choose_clean_image(story, result):
         print("Wikimedia image:", chosen["title"])
         return chosen["url"], f"Wikimedia Commons — {chosen['title']}"
 
-    # 3. Category-specific clean fallback. This keeps an important story publishable
-    # even if a particular subject has no searchable image.
     category = website.get("category", "Australia")
     fallback_queries = {
         "Politics": "Australian Parliament Canberra",
@@ -436,7 +437,6 @@ def run_one():
                 raise RuntimeError("NO_PUBLICATION: Guardian Australia source page was unavailable.")
             story.update(page)
 
-            # Write the story first so the image search can use the final headline and subject.
             result = ask_openrouter_original(story, [])
             result = clean_english_result(result)
             verification = result.get("verification", {})
@@ -478,7 +478,6 @@ def run_one():
             published_count += 1
 
         except Exception as exc:
-            # A bad image/source/model response must not stop the other slots in the run.
             print("SKIPPED CANDIDATE:", story["title"])
             print("Reason:", exc)
             continue

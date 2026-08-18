@@ -1,1 +1,50 @@
+name: Australia By Aussie Newsroom
 
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  newsroom:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests feedparser beautifulsoup4 google-genai
+
+      - name: Run Australia By Aussie Newsroom
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          WP_URL: ${{ secrets.WP_URL }}
+          WP_USERNAME: ${{ secrets.WP_USERNAME }}
+          WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+        run: |
+          python newsroom.py
+
+      - name: Save newsroom state
+        run: |
+          git config user.name "Australia By Aussie Newsroom"
+          git config user.email "newsroom@australiabyaussie.com"
+
+          git add state.json
+
+          if git diff --cached --quiet; then
+            echo "No state changes."
+          else
+            git commit -m "Update newsroom state"
+            git push
+          fi

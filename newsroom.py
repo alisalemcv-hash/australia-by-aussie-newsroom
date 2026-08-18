@@ -23,7 +23,13 @@ GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
 STATE_FILE = "state.json"
 
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
-OPENROUTER_MODEL = "openrouter/free"
+# Use fixed free models instead of openrouter/free, which randomly
+# selects from the free pool and can return incompatible/empty responses.
+OPENROUTER_MODELS = [
+    "openai/gpt-oss-120b:free",
+    "openai/gpt-oss-20b:free",
+    "openrouter/free",
+]
 
 WP_URL = os.environ["WP_URL"].rstrip("/")
 WP_USERNAME = os.environ["WP_USERNAME"]
@@ -1190,165 +1196,181 @@ def call_openrouter(
         "chat/completions"
     )
 
-    payload = {
-        "model": OPENROUTER_MODEL,
-
-        "messages": messages,
-
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name":
-                    "australia_by_aussie_newsroom",
-                "strict": True,
-                "schema": schema
-            }
-        },
-
-        "temperature": 0.15,
-
-        "max_tokens": 18000,
-
-        "provider": {
-            "require_parameters": True
-        }
-    }
-
     headers = {
         "Authorization":
             f"Bearer {OPENROUTER_API_KEY}",
-
         "Content-Type":
             "application/json",
-
         "HTTP-Referer":
             "https://australiabyaussie.com",
-
         "X-Title":
             "Australia By Aussie Newsroom"
     }
 
-    for attempt in range(
-        1,
-        4
-    ):
+    last_error = None
 
-        try:
+    for model in OPENROUTER_MODELS:
 
-            response = requests.post(
-                endpoint,
-                headers=headers,
-                json=payload,
-                timeout=240
-            )
+        payload = {
+            "model": model,
+            "messages": messages,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name":
+                        "australia_by_aussie_newsroom",
+                    "strict": True,
+                    "schema": schema
+                }
+            },
+            "temperature": 0.15,
+            "max_tokens": 18000,
+            "provider": {
+                "require_parameters": True
+            }
+        }
 
-            if response.status_code in (
-                429,
-                500,
-                502,
-                503,
-                504
-            ):
-
-                if attempt < 3:
-
-                    wait = (
-                        attempt * 6
-                    )
-
-                    print(
-                        f"Temporary OpenRouter "
-                        f"error {response.status_code}; "
-                        f"retrying in {wait}s..."
-                    )
-
-                    time.sleep(
-                        wait
-                    )
-
-                    continue
-
-            response.raise_for_status()
-
-            data = response.json()
-
-            model_used = data.get(
-                "model",
-                "unknown"
-            )
-
-            print(
-                "OpenRouter model used:",
-                model_used
-            )
-
-            content = (
-                data["choices"][0]
-                ["message"]
-                ["content"]
-            )
-
-            if not content:
-
-                raise RuntimeError(
-                    "OpenRouter returned empty content."
-                )
-
-            content = content.strip()
-
-            if content.startswith("```"):
-
-                content = re.sub(
-                    r"^```json\s*",
-                    "",
-                    content,
-                    flags=re.IGNORECASE
-                )
-
-                content = re.sub(
-                    r"\s*```$",
-                    "",
-                    content
-                )
-
-                content = content.strip()
-
-            return json.loads(
-                content
-            )
-
-        except requests.exceptions.HTTPError as e:
+        for attempt in range(1, 4):
 
             try:
 
-                error = response.json()
-
-            except Exception:
-
-                error = response.text[:5000]
-
-            raise RuntimeError(
-                "OpenRouter HTTP error "
-                f"{response.status_code}:\n"
-                + json.dumps(
-                    error,
-                    ensure_ascii=False
-                )[:6000]
-            ) from e
-
-        except requests.exceptions.RequestException as e:
-
-            if attempt < 3:
-
-                time.sleep(
-                    attempt * 6
+                print(
+                    f"OpenRouter trying free model: {model} "
+                    f"(attempt {attempt}/3)"
                 )
 
-                continue
+                response = requests.post(
+                    endpoint,
+                    headers=headers,
+                    json=payload,
+                    timeout=240
+                )
 
-            raise RuntimeError(
-                f"OpenRouter request failed: {e}"
-            ) from e
+                # Authentication / permission errors are not fixed by
+                # changing models, so fail immediately.
+                if response.status_code in (401, 403):
+                    try:
+                        error = response.json()
+                    except Exception:
+                        error = response.text[:5000]
+
+                    raise RuntimeError(
+                        "OpenRouter authentication/permission error:\n"
+                        + json.dumps(error, ensure_ascii=False)[:6000]
+                    )
+
+                # These are normally transient or model/provider-specific.
+                if response.status_code in (
+                    400, 404, 408, 409, 413, 422,
+                    429, 500, 502, 503, 504
+                ):
+
+                    try:
+                        error = response.json()
+                    except Exception:
+                        error = response.text[:5000]
+
+                    last_error = RuntimeError(
+                        f"OpenRouter {response.status_code} for {model}:\n"
+                        + json.dumps(error, ensure_ascii=False)[:6000]
+                    )
+
+                    # 400/404/422 often means the selected provider does not
+                    # support the requested structured-output parameters.
+                    # Move to the next free model instead of killing the run.
+                    if response.status_code in (400, 404, 422):
+                        print(
+                            f"Model {model} rejected the request; "
+                            "trying the next free model."
+                        )
+                        break
+
+                    if attempt < 3:
+                        wait = attempt * 8
+                        print(
+                            f"Temporary OpenRouter error "
+                            f"{response.status_code}; retrying in {wait}s..."
+                        )
+                        time.sleep(wait)
+                        continue
+
+                    print(
+                        f"Model {model} exhausted retries; "
+                        "trying the next free model."
+                    )
+                    break
+
+                response.raise_for_status()
+                data = response.json()
+
+                model_used = data.get("model", model)
+                print("OpenRouter model used:", model_used)
+
+                choices = data.get("choices") or []
+                if not choices:
+                    last_error = RuntimeError(
+                        f"OpenRouter returned no choices for {model}."
+                    )
+                    print(str(last_error))
+                    break
+
+                message = choices[0].get("message") or {}
+                content = message.get("content")
+
+                # Some reasoning models/providers can return an empty final
+                # message. Treat that as a model failure and fall back.
+                if not content or not str(content).strip():
+                    last_error = RuntimeError(
+                        f"OpenRouter returned empty content for {model}."
+                    )
+                    print(str(last_error))
+                    break
+
+                content = str(content).strip()
+
+                if content.startswith("```"):
+                    content = re.sub(
+                        r"^```json\s*",
+                        "",
+                        content,
+                        flags=re.IGNORECASE
+                    )
+                    content = re.sub(
+                        r"\s*```$",
+                        "",
+                        content
+                    ).strip()
+
+                try:
+                    return json.loads(content)
+                except json.JSONDecodeError as exc:
+                    last_error = RuntimeError(
+                        f"OpenRouter returned invalid JSON from {model}: "
+                        f"{exc}\n{content[:3000]}"
+                    )
+                    print(str(last_error))
+                    break
+
+            except requests.exceptions.RequestException as exc:
+
+                last_error = RuntimeError(
+                    f"OpenRouter request failed for {model}: {exc}"
+                )
+
+                if attempt < 3:
+                    time.sleep(attempt * 8)
+                    continue
+
+                break
+
+            except RuntimeError:
+                raise
+
+    raise RuntimeError(
+        "All configured free OpenRouter models failed. "
+        "No article will be published.\n"
+        + (str(last_error) if last_error else "Unknown OpenRouter error.")
+    )
 
 
 # ============================================================
@@ -1712,6 +1734,10 @@ ARTICLE_SCHEMA = {
                     "type": "string"
                 },
 
+                "arabic_caption": {
+                    "type": "string"
+                },
+
                 "hashtags": {
                     "type": "array",
                     "items": {
@@ -1726,6 +1752,7 @@ ARTICLE_SCHEMA = {
                 "voiceover",
                 "arabic_voiceover",
                 "caption",
+                "arabic_caption",
                 "hashtags"
             ],
 
@@ -1926,11 +1953,7 @@ def validate_output(
         ""
     )
 
-    if status not in {
-        "VERIFIED",
-        "PARTIALLY VERIFIED",
-        "DEVELOPING"
-    }:
+    if status != "VERIFIED":
 
         errors.append(
             "Verification status is insufficient."
@@ -2096,6 +2119,124 @@ def validate_output(
 
 
 # ============================================================
+# WORDPRESS DUPLICATE PROTECTION
+# ============================================================
+
+SOURCE_MARKER_PREFIX = "<!-- australia-by-aussie-source-url: "
+SOURCE_MARKER_SUFFIX = " -->"
+
+
+def normalise_title(title):
+
+    value = clean_text(title).lower()
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def get_recent_wp_posts(max_pages=5):
+
+    endpoint = f"{WP_URL}/wp-json/wp/v2/posts"
+    posts = []
+
+    for page in range(1, max_pages + 1):
+
+        try:
+            response = requests.get(
+                endpoint,
+                auth=wp_auth(),
+                params={
+                    "per_page": 100,
+                    "page": page,
+                    "status": "publish"
+                },
+                timeout=45
+            )
+
+            if response.status_code == 400:
+                # No more pages.
+                break
+
+            response.raise_for_status()
+            batch = response.json()
+
+            if not batch:
+                break
+
+            posts.extend(batch)
+
+            total_pages = int(
+                response.headers.get("X-WP-TotalPages", page)
+            )
+
+            if page >= total_pages:
+                break
+
+        except requests.exceptions.RequestException as exc:
+            raise RuntimeError(
+                f"Could not check WordPress for existing posts: {exc}"
+            ) from exc
+
+    return posts
+
+
+def wordpress_source_exists(source_url, posts):
+
+    marker = (
+        SOURCE_MARKER_PREFIX
+        + source_url
+        + SOURCE_MARKER_SUFFIX
+    )
+
+    for post in posts:
+        content = (
+            post.get("content", {})
+            .get("rendered", "")
+        )
+
+        if marker in content:
+            return True
+
+    return False
+
+
+def wordpress_title_exists(title, posts):
+
+    target = normalise_title(title)
+    if not target:
+        return False
+
+    for post in posts:
+        rendered = (
+            post.get("title", {})
+            .get("rendered", "")
+        )
+
+        if normalise_title(rendered) == target:
+            return True
+
+    return False
+
+
+def source_marker(source_url):
+
+    return (
+        SOURCE_MARKER_PREFIX
+        + source_url
+        + SOURCE_MARKER_SUFFIX
+    )
+
+
+def add_source_marker(article_html, source_url):
+
+    marker = source_marker(source_url)
+
+    if source_url in article_html:
+        return article_html
+
+    return marker + "\n" + article_html
+
+
+# ============================================================
 # WORDPRESS
 # ============================================================
 
@@ -2164,33 +2305,88 @@ def upload_image(
     return media_id
 
 
+def get_or_create_term(term_type, name):
+
+    endpoint = f"{WP_URL}/wp-json/wp/v2/{term_type}"
+
+    response = requests.get(
+        endpoint,
+        auth=wp_auth(),
+        params={
+            "search": name,
+            "per_page": 20
+        },
+        timeout=30
+    )
+    response.raise_for_status()
+
+    target = normalise_title(name)
+
+    for item in response.json():
+        if normalise_title(item.get("name", "")) == target:
+            return item["id"]
+
+    created = requests.post(
+        endpoint,
+        auth=wp_auth(),
+        json={"name": name},
+        timeout=30
+    )
+
+    # A race or an existing term can return 400. Re-query once.
+    if created.status_code == 400:
+        response = requests.get(
+            endpoint,
+            auth=wp_auth(),
+            params={"search": name, "per_page": 20},
+            timeout=30
+        )
+        response.raise_for_status()
+        for item in response.json():
+            if normalise_title(item.get("name", "")) == target:
+                return item["id"]
+
+    created.raise_for_status()
+    return created.json()["id"]
+
+
 def publish_post(
     content,
-    featured_media
+    featured_media,
+    source_url
 ):
 
     endpoint = (
         f"{WP_URL}/wp-json/wp/v2/posts"
     )
 
+    # Create/resolve the exact category and the single requested tag.
+    category_id = get_or_create_term(
+        "categories",
+        content["category"]
+    )
+
+    tag_id = get_or_create_term(
+        "tags",
+        content["tag"]
+    )
+
+    article_html = add_source_marker(
+        content["article_html"],
+        source_url
+    )
+
     response = requests.post(
         endpoint,
         auth=wp_auth(),
         json={
-            "title":
-                content["headline"],
-
-            "content":
-                content["article_html"],
-
-            "excerpt":
-                content["excerpt"],
-
-            "status":
-                "publish",
-
-            "featured_media":
-                featured_media
+            "title": content["headline"],
+            "content": article_html,
+            "excerpt": content["excerpt"],
+            "status": "publish",
+            "featured_media": featured_media,
+            "categories": [category_id],
+            "tags": [tag_id]
         },
         timeout=90
     )
@@ -2206,486 +2402,304 @@ def publish_post(
 
 def main():
 
-    print(
-        "=============================================="
-    )
-
-    print(
-        "Australia By Aussie Automated Newsroom V2"
-    )
-
-    print(
-        "PROFESSIONAL VERIFICATION EDITION"
-    )
-
-    print(
-        "=============================================="
-    )
+    print("==============================================")
+    print("Australia By Aussie Automated Newsroom V3")
+    print("NEW-ONLY + VERIFIED-ONLY + DUPLICATE PROTECTION")
+    print("==============================================")
 
     state = load_state()
-
-    processed = set(
-        state.get(
-            "processed",
-            []
-        )
-    )
+    processed = set(state.get("processed", []))
 
     # --------------------------------------------------------
-    # FIND NEWS
+    # LOAD WORDPRESS INDEX ONCE PER RUN
     # --------------------------------------------------------
 
+    print("Checking WordPress for already-published stories...")
+    existing_posts = get_recent_wp_posts(max_pages=5)
     print(
-        "Checking Guardian Australia RSS..."
+        f"Loaded {len(existing_posts)} recent published WordPress posts."
     )
 
+    # --------------------------------------------------------
+    # FIND NEW GUARDIAN STORIES
+    # --------------------------------------------------------
+
+    print("Checking Guardian Australia RSS...")
     feed = get_feed()
 
     if not feed.entries:
-
-        print(
-            "No Guardian stories found."
-        )
-
+        print("No Guardian stories found.")
         return
 
     candidates = []
 
     for entry in feed.entries[:25]:
 
-        url = (
-            entry.get(
-                "link",
-                ""
-            )
-            .strip()
-        )
-
+        url = entry.get("link", "").strip()
         if not url:
             continue
 
-        key = article_id(
-            url
-        )
+        key = article_id(url)
+        title = clean_text(entry.get("title", ""))
+        description = clean_text(entry.get("summary", ""))
 
+        # Layer 1: local state.
         if key in processed:
+            print("SKIP state:", title)
             continue
 
-        candidates.append(
-            {
-                "id":
-                    key,
+        # Layer 2: exact source URL marker in WordPress.
+        if wordpress_source_exists(url, existing_posts):
+            print("SKIP already published (source URL):", title)
+            processed.add(key)
+            continue
 
-                "url":
-                    url,
+        # Layer 3: exact title match for articles published before the
+        # source-marker system was introduced.
+        if wordpress_title_exists(title, existing_posts):
+            print("SKIP already published (exact title):", title)
+            processed.add(key)
+            continue
 
-                "title":
-                    clean_text(
-                        entry.get(
-                            "title",
-                            ""
-                        )
-                    ),
+        candidates.append({
+            "id": key,
+            "url": url,
+            "title": title,
+            "description": description
+        })
 
-                "description":
-                    clean_text(
-                        entry.get(
-                            "summary",
-                            ""
-                        )
-                    )
-            }
-        )
+    state["processed"] = list(processed)[-200:]
+    save_state(state)
 
     if not candidates:
-
-        print(
-            "No new stories."
-        )
-
-        return
-
-    story = candidates[0]
-
-    print(
-        f"Found {len(candidates)} new candidates."
-    )
-
-    print(
-        "Selected:"
-    )
-
-    print(
-        story["title"]
-    )
-
-    # --------------------------------------------------------
-    # SOURCE PAGE
-    # --------------------------------------------------------
-
-    print(
-        "Opening source page..."
-    )
-
-    page = get_article_page(
-        story["url"]
-    )
-
-    story.update(
-        page
-    )
-
-    if not story.get(
-        "image_url"
-    ):
-
-        print(
-            "No image found. Skipping story."
-        )
-
-        processed.add(
-            story["id"]
-        )
-
-        state["processed"] = list(
-            processed
-        )
-
-        save_state(
-            state
-        )
-
+        print("No new unpublished stories. Nothing to publish.")
         return
 
     print(
-        "Image found."
+        f"Found {len(candidates)} unpublished candidates. "
+        "Maximum one publication per run."
     )
 
     # --------------------------------------------------------
-    # RESEARCH
+    # TRY CANDIDATES UNTIL ONE IS SUCCESSFULLY PUBLISHED
     # --------------------------------------------------------
 
-    research = collect_research(
-        story
-    )
+    for story in candidates:
 
-    print(
-        f"Collected {len(research)} research sources."
-    )
+        print("==============================================")
+        print("Candidate:", story["title"])
+        print("Source:", story["url"])
+        print("==============================================")
 
-    # --------------------------------------------------------
-    # VERIFICATION
-    # --------------------------------------------------------
+        try:
 
-    print(
-        "=============================================="
-    )
+            print("Opening source page...")
+            page = get_article_page(story["url"])
+            story.update(page)
 
-    print(
-        "STARTING VERIFICATION BEFORE WRITING"
-    )
+            if not story.get("image_url"):
+                print("No image found. Skipping this candidate.")
+                continue
 
-    print(
-        "=============================================="
-    )
+            print("Image found.")
+            print(story["image_url"])
 
-    verification = verify_story(
-        story,
-        research
-    )
+            # ------------------------------------------------
+            # RESEARCH
+            # ------------------------------------------------
 
-    print(
-        "Verification status:",
-        verification.get(
-            "status"
-        )
-    )
-
-    print(
-        "Confirmed facts:",
-        len(
-            verification.get(
-                "confirmed",
-                []
+            research = collect_research(story)
+            print(
+                f"Collected {len(research)} research sources."
             )
-        )
-    )
 
-    print(
-        "Reported-only facts:",
-        len(
-            verification.get(
-                "reported_only",
-                []
+            # ------------------------------------------------
+            # VERIFICATION BEFORE WRITING
+            # ------------------------------------------------
+
+            print("==============================================")
+            print("STARTING VERIFICATION BEFORE WRITING")
+            print("==============================================")
+
+            verification = verify_story(
+                story,
+                research
             )
-        )
-    )
 
-    print(
-        "Not confirmed:",
-        len(
-            verification.get(
-                "not_confirmed",
-                []
+            status = verification.get("status", "")
+
+            print("Verification status:", status)
+            print(
+                "Confirmed facts:",
+                len(verification.get("confirmed", []))
             )
-        )
-    )
-
-    print(
-        "Primary sources:",
-        len(
-            verification.get(
-                "primary_sources",
-                []
+            print(
+                "Reported-only facts:",
+                len(verification.get("reported_only", []))
             )
-        )
-    )
-
-    print(
-        "Verified quotes:",
-        len(
-            verification.get(
-                "verified_quotes",
-                []
+            print(
+                "Not confirmed:",
+                len(verification.get("not_confirmed", []))
             )
-        )
-    )
+            print(
+                "Primary sources:",
+                len(verification.get("primary_sources", []))
+            )
+            print(
+                "Verified quotes:",
+                len(verification.get("verified_quotes", []))
+            )
 
-    # --------------------------------------------------------
-    # HARD STOP BEFORE WRITING
-    # --------------------------------------------------------
+            # HARD publication gate: only VERIFIED + publish=true.
+            if status != "VERIFIED" or not verification.get("publish", False):
+                print("NOT PUBLISHED: verification did not pass.")
+                # Do NOT mark it processed. A developing story may become
+                # verifiable on a later 30-minute run.
+                continue
 
-    if not verification.get(
-        "publish",
-        False
-    ):
+            if verification.get("conflicts"):
+                print("NOT PUBLISHED: unresolved source conflict.")
+                continue
 
-        print(
-            "=============================================="
-        )
+            # ------------------------------------------------
+            # WRITING
+            # ------------------------------------------------
 
-        print(
-            "DO NOT PUBLISH"
-        )
+            print("Verification passed.")
+            print("Writing original Australia By Aussie story...")
 
-        print(
-            "Verification did not approve publication."
-        )
+            result = write_story(
+                story,
+                research,
+                verification
+            )
 
-        print(
-            "=============================================="
-        )
+            print("Running final editorial validation...")
+            validate_output(result, verification)
 
-        processed.add(
-            story["id"]
-        )
+            website = result["website"]
 
-        state["processed"] = list(
-            processed
-        )
+            # ------------------------------------------------
+            # SECOND DUPLICATE CHECK RIGHT BEFORE PUBLISH
+            # ------------------------------------------------
 
-        save_state(
-            state
-        )
+            latest_posts = get_recent_wp_posts(max_pages=5)
 
-        return
+            if wordpress_source_exists(story["url"], latest_posts):
+                print(
+                    "STOP: another run/manual post already published "
+                    "this source while we were working."
+                )
+                processed.add(story["id"])
+                state["processed"] = list(processed)[-200:]
+                save_state(state)
+                return
 
-    if verification.get(
-        "conflicts"
-    ):
+            if wordpress_title_exists(website["headline"], latest_posts):
+                print(
+                    "STOP: an identical headline already exists on WordPress."
+                )
+                processed.add(story["id"])
+                state["processed"] = list(processed)[-200:]
+                save_state(state)
+                return
 
-        print(
-            "Material source conflicts detected."
-        )
+            # ------------------------------------------------
+            # IMAGE
+            # ------------------------------------------------
 
-        processed.add(
-            story["id"]
-        )
+            print("Uploading source image to WordPress...")
 
-        state["processed"] = list(
-            processed
-        )
+            extension = ".jpg"
 
-        save_state(
-            state
-        )
+            try:
+                head = requests.head(
+                    story["image_url"],
+                    timeout=30,
+                    headers={
+                        "User-Agent":
+                            "AustraliaByAussie-Newsroom/3.0"
+                    },
+                    allow_redirects=True
+                )
 
-        return
+                content_type = head.headers.get(
+                    "Content-Type", ""
+                ).lower()
 
-    # --------------------------------------------------------
-    # WRITING
-    # --------------------------------------------------------
+                if "png" in content_type:
+                    extension = ".png"
+                elif "webp" in content_type:
+                    extension = ".webp"
 
-    print(
-        "Verification passed."
-    )
+            except Exception:
+                pass
 
-    print(
-        "Writing original Australia By Aussie story..."
-    )
+            filename = (
+                re.sub(
+                    r"[^a-zA-Z0-9]+",
+                    "-",
+                    website["headline"]
+                )
+                .strip("-")
+                .lower()
+                + extension
+            )
 
-    result = write_story(
-        story,
-        research,
-        verification
-    )
+            media_id = upload_image(
+                story["image_url"],
+                filename,
+                website["alt_text"]
+            )
 
-    # --------------------------------------------------------
-    # FINAL VALIDATION
-    # --------------------------------------------------------
+            print("Image uploaded. Media ID:", media_id)
 
-    print(
-        "Running final editorial validation..."
-    )
+            # ------------------------------------------------
+            # FINAL WORDPRESS PUBLISH
+            # ------------------------------------------------
 
-    validate_output(
-        result,
-        verification
-    )
+            print("Publishing WordPress article...")
 
-    website = result["website"]
+            post = publish_post(
+                website,
+                media_id,
+                story["url"]
+            )
 
-    # --------------------------------------------------------
-    # IMAGE
-    # --------------------------------------------------------
+            print("==============================================")
+            print("PUBLISHED SUCCESSFULLY")
+            print("==============================================")
+            print(
+                "Title:",
+                post.get("title", {}).get("rendered")
+            )
+            print("URL:", post.get("link"))
+            print("Post ID:", post.get("id"))
 
-    print(
-        "Uploading source image to WordPress..."
-    )
+            # Only a successful publication becomes processed.
+            processed.add(story["id"])
+            state["processed"] = list(processed)[-200:]
+            state["last_run"] = datetime.now(timezone.utc).isoformat()
+            state["last_published_source"] = story["url"]
+            state["last_published_post_id"] = post.get("id")
+            save_state(state)
 
-    extension = ".jpg"
+            print("Newsroom state saved.")
+            return
 
-    try:
+        except Exception as exc:
 
-        head = requests.head(
-            story["image_url"],
-            timeout=30,
-            headers={
-                "User-Agent":
-                    "AustraliaByAussie-Newsroom/2.0"
-            },
-            allow_redirects=True
-        )
+            # A failed candidate must never be marked as processed.
+            # This lets the next scheduled run retry it.
+            print("Candidate failed:", repr(exc))
+            print("This candidate will remain eligible for a future run.")
+            continue
 
-        content_type = head.headers.get(
-            "Content-Type",
-            ""
-        ).lower()
-
-        if "png" in content_type:
-
-            extension = ".png"
-
-        elif "webp" in content_type:
-
-            extension = ".webp"
-
-    except Exception:
-
-        pass
-
-    filename = (
-        re.sub(
-            r"[^a-zA-Z0-9]+",
-            "-",
-            website["headline"]
-        )
-        .strip("-")
-        .lower()
-        + extension
-    )
-
-    media_id = upload_image(
-        story["image_url"],
-        filename,
-        website["alt_text"]
-    )
-
-    print(
-        "Image uploaded. Media ID:",
-        media_id
-    )
-
-    # --------------------------------------------------------
-    # WORDPRESS
-    # --------------------------------------------------------
-
-    print(
-        "Publishing WordPress article..."
-    )
-
-    post = publish_post(
-        website,
-        media_id
-    )
-
-    # --------------------------------------------------------
-    # SUCCESS
-    # --------------------------------------------------------
-
-    print(
-        "=============================================="
-    )
-
-    print(
-        "PUBLISHED SUCCESSFULLY"
-    )
-
-    print(
-        "=============================================="
-    )
-
-    print(
-        "Title:",
-        post.get(
-            "title",
-            {}
-        ).get(
-            "rendered"
-        )
-    )
-
-    print(
-        "URL:",
-        post.get(
-            "link"
-        )
-    )
-
-    print(
-        "Post ID:",
-        post.get(
-            "id"
-        )
-    )
-
-    # --------------------------------------------------------
-    # STATE
-    # --------------------------------------------------------
-
-    processed.add(
-        story["id"]
-    )
-
-    state["processed"] = list(
-        processed
-    )
-
-    state["last_run"] = (
-        datetime.now(
-            timezone.utc
-        ).isoformat()
-    )
-
-    save_state(
-        state
-    )
-
-    print(
-        "Newsroom state saved."
-    )
+    print("==============================================")
+    print("RUN COMPLETE — NOTHING PUBLISHED")
+    print("No candidate passed every publication gate.")
+    print("==============================================")
 
 
 if __name__ == "__main__":
-
     main()

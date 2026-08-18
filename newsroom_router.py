@@ -80,11 +80,15 @@ def priority_score(story):
     return score, matches
 
 
-def discover():
+def discover(processed=None):
+    """Discover fresh stories, excluding processed IDs before time-bucket selection."""
+    processed = processed or set()
     items = feed_candidates(GUARDIAN_RSS, "Guardian Australia") + feed_candidates(SBS_RSS, "SBS News Australia")
     items.sort(key=lambda x: x["published"], reverse=True)
     unique = []
     for item in items:
+        if item["id"] in processed:
+            continue
         if any(duplicate_story(item, old) for old in unique):
             continue
         unique.append(item)
@@ -95,7 +99,7 @@ def discover():
     for hours in BUCKETS:
         bucket = [x for x in unique if x["id"] not in seen and now - x["published"] <= timedelta(hours=hours)]
         bucket.sort(key=lambda x: (priority_score(x)[0], x["published"]), reverse=True)
-        print(f"TIME BUCKET {hours}h: {len(bucket)} eligible")
+        print(f"TIME BUCKET {hours}h: {len(bucket)} eligible fresh stories")
         for x in bucket:
             selected.append(x)
             seen.add(x["id"])
@@ -107,8 +111,8 @@ def discover():
 def run():
     state = base.load_state()
     processed = set(state.get("processed", []))
-    candidates = [x for x in discover() if x["id"] not in processed]
-    print(f"Unique unprocessed candidates: {len(candidates)}")
+    candidates = discover(processed)
+    print(f"Unique fresh candidates selected: {len(candidates)}")
     if not candidates:
         raise RuntimeError("NO_PUBLICATION: No new unprocessed Australian stories were found in the last 24 hours.")
 
@@ -165,7 +169,6 @@ def run():
     for failure in failures:
         print("FAILURE:", failure)
 
-    # Never report a fake GitHub Actions Success when nothing reached WordPress.
     if published == 0:
         raise RuntimeError("NO_PUBLICATION: 0 articles were confirmed published to WordPress. See FAILURE lines above.")
 

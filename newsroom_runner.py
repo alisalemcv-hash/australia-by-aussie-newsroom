@@ -4,12 +4,10 @@ from urllib.parse import quote_plus
 import requests, feedparser
 from bs4 import BeautifulSoup
 
-# Load the proven newsroom implementation without running its main().
 source = open("newsroom.py", "r", encoding="utf-8").read()
 ns = {"__name__": "newsroom_loaded"}
 exec(compile(source, "newsroom.py", "exec"), ns)
 
-http_get = ns["http_get"]
 clean_text = ns["clean_text"]
 article_id = ns["article_id"]
 load_state = ns["load_state"]
@@ -80,14 +78,12 @@ def discover_old_guardian_stories():
             published = parse_entry_time(entry)
             if not published:
                 continue
-
             age = now - published
             if age < MIN_AGE or age > MAX_AGE:
                 continue
 
             title = clean_text(entry.get("title", ""))
             link = resolve_guardian_url(entry.get("link", "").strip())
-
             if not title or "theguardian.com/australia-news/" not in link:
                 continue
 
@@ -99,15 +95,11 @@ def discover_old_guardian_stories():
                 "published": published,
             }
 
-    return sorted(
-        candidates.values(),
-        key=lambda item: item["published"],
-        reverse=True,
-    )
+    return sorted(candidates.values(), key=lambda item: item["published"], reverse=True)
 
 
 def find_reusable_image(query):
-    """Find a freely reusable image; never strip branding/watermarks."""
+    """Use only a separately reusable image; never strip Guardian branding/watermarks."""
     api = "https://commons.wikimedia.org/w/api.php"
     params = {
         "action": "query",
@@ -120,7 +112,6 @@ def find_reusable_image(query):
         "iiurlwidth": 1600,
         "format": "json",
     }
-
     try:
         response = requests.get(
             api,
@@ -137,11 +128,8 @@ def find_reusable_image(query):
     for page in pages:
         info = (page.get("imageinfo") or [{}])[0]
         meta = info.get("extmetadata") or {}
-        license_name = clean_text(
-            meta.get("LicenseShortName", {}).get("value", "")
-        )
+        license_name = clean_text(meta.get("LicenseShortName", {}).get("value", ""))
         license_lower = license_name.lower()
-
         if any(term in license_lower for term in ("noncommercial", "no derivatives")):
             continue
 
@@ -155,8 +143,31 @@ def find_reusable_image(query):
             "author": clean_text(meta.get("Artist", {}).get("value", "")),
             "license": license_name or "See Wikimedia Commons file page",
         }
-
     return None
+
+
+def exact_25_word_excerpt(result):
+    website = result.get("website", {})
+    excerpt = clean_text(website.get("excerpt", ""))
+    words = re.findall(r"\b[\w’'-]+\b", excerpt, flags=re.UNICODE)
+    if len(words) == 25:
+        return
+
+    article = BeautifulSoup(
+        website.get("article_html", ""), "html.parser"
+    ).get_text(" ", strip=True)
+    article_words = re.findall(r"\b[\w’'-]+\b", article, flags=re.UNICODE)
+
+    if len(words) > 25:
+        website["excerpt"] = " ".join(words[:25])
+        return
+
+    combined = words[:]
+    for word in article_words:
+        if len(combined) >= 25:
+            break
+        combined.append(word)
+    website["excerpt"] = " ".join(combined[:25])
 
 
 def run_one():
@@ -169,26 +180,21 @@ def run_one():
         (candidate for candidate in candidates if candidate["id"] not in processed),
         None,
     )
-
     if not story:
         print("No eligible unprocessed Guardian story found.")
         return False
 
     print("Selected:", story["title"])
-
     page = ns["get_article_page"](story["url"])
     if not page.get("text"):
         print("Source page unavailable. Skipping.")
         return False
     story.update(page)
 
-    # Do not strip or bypass Guardian branding/watermarks.
-    # Use a separately reusable image instead.
     image = find_reusable_image(story["title"])
     if not image:
         print("No verified reusable image found. Skipping story safely.")
         return False
-
     print("Reusable image:", image["url"])
 
     sources = collect_sources(story)
@@ -204,6 +210,8 @@ def run_one():
         save_state(state)
         return False
 
+    # Repair the deterministic 25-word requirement before final validation.
+    exact_25_word_excerpt(result)
     validate_story(result)
     website = result["website"]
 
@@ -234,12 +242,7 @@ def run_one():
         + extension
     )
 
-    media_id = upload_image(
-        image["url"],
-        filename,
-        website["alt_text"],
-    )
-
+    media_id = upload_image(image["url"], filename, website["alt_text"])
     post = publish_post(website, media_id)
 
     print("PUBLISHED SUCCESSFULLY")

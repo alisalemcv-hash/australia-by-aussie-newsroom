@@ -31,6 +31,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install --disable-pip-version-check requests feedparser beautifulsoup4
 
+      - name: Select current OpenRouter model fallback
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("newsroom.py")
+          text = p.read_text(encoding="utf-8")
+          old = 'OPENROUTER_MODELS = ["openai/gpt-oss-20b:free", "openai/gpt-oss-120b:free"]'
+          new = 'OPENROUTER_MODELS = ["qwen/qwen3-next-80b-a3b-instruct:free", "openai/gpt-oss-20b:free"]'
+          if old not in text:
+              raise SystemExit("Expected OpenRouter model list was not found; refusing to run with an unknown configuration.")
+          p.write_text(text.replace(old, new, 1), encoding="utf-8")
+          print("OpenRouter models: Qwen3 Next 80B free -> GPT-OSS 20B free")
+          PY
+
       - name: Run Australia By Aussie Newsroom
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

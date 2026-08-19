@@ -10,16 +10,14 @@ import image_selector
 base.choose_clean_image = image_selector.choose_clean_image
 
 GUARDIAN_RSS = "https://www.theguardian.com/australia-news/rss"
-SBS_RSS = "https://www.sbs.com.au/news/topic/australia/feed"
 BUCKETS = [1, 2, 3, 4, 6, 8, 12, 18, 24]
 MAX_AGE = timedelta(hours=24)
 MAX_POSTS = 2
 ALLOWED_CATEGORIES = {"Australia", "Politics", "Business", "Cost of Living", "Life", "World", "Finance"}
 
 ROUTER_PROMPT = r"""You are the senior journalist and fact-checker for Australia By Aussie.
-Write natural Australian English only. Publish Australian news only. The lead may come from Guardian Australia or SBS News Australia; write a completely original article and never invent facts or quotes.
-Choose exactly one category: Australia, Politics, Business, Cost of Living, Life, World, Finance. Politics normally applies to Albanese, ministers, cabinet, parliament, federal policy, Labor/Coalition and political disputes.
-The runner will attach a separate clean image. Never use Guardian/SBS images, publisher logos, watermarks, screenshots, social cards, infographics or images containing overlaid text.
+Write natural Australian English only. The source is Guardian Australia only. Publish only stories supplied from Guardian Australia. Write a completely original article based only on the supplied Guardian source material. Never invent facts or quotes.
+Choose exactly one category: Australia, Politics, Business, Cost of Living, Life, World, Finance. The runner will attach a separate clean image. Never use Guardian images, publisher logos, watermarks, screenshots, social cards, infographics or images containing overlaid text.
 Return valid JSON only."""
 
 
@@ -53,9 +51,9 @@ def feed_candidates(url, source):
         link = (e.get("link") or "").strip()
         if not title or not link:
             continue
-        if source == "Guardian Australia" and not link.startswith("https://www.theguardian.com/australia-news/"):
+        if not link.startswith("https://www.theguardian.com/australia-news/"):
             continue
-        out.append({"id": base.article_id(link), "url": link, "title": title, "summary": summary, "published": published, "source": source})
+        out.append({"id": base.article_id(link), "url": link, "title": title, "summary": summary, "published": published, "source": "Guardian Australia"})
     return out
 
 
@@ -86,7 +84,8 @@ def priority_score(story):
 
 def discover(processed=None):
     processed = processed or set()
-    items = feed_candidates(GUARDIAN_RSS, "Guardian Australia") + feed_candidates(SBS_RSS, "SBS News Australia")
+    # Guardian Australia ONLY. No SBS, ABC, Google News or other publisher feeds.
+    items = feed_candidates(GUARDIAN_RSS, "Guardian Australia")
     items.sort(key=lambda x: x["published"], reverse=True)
     unique = []
     for item in items:
@@ -102,7 +101,7 @@ def discover(processed=None):
     for hours in BUCKETS:
         bucket = [x for x in unique if x["id"] not in seen and now - x["published"] <= timedelta(hours=hours)]
         bucket.sort(key=lambda x: (priority_score(x)[0], x["published"]), reverse=True)
-        print(f"TIME BUCKET {hours}h: {len(bucket)} eligible fresh stories")
+        print(f"TIME BUCKET {hours}h: {len(bucket)} eligible Guardian Australia stories")
         for x in bucket:
             selected.append(x)
             seen.add(x["id"])
@@ -193,9 +192,9 @@ def run():
     state = base.load_state()
     processed = set(state.get("processed", []))
     candidates = discover(processed)
-    print(f"Unique fresh candidates selected: {len(candidates)}")
+    print(f"Unique fresh Guardian Australia candidates selected: {len(candidates)}")
     if not candidates:
-        raise RuntimeError("NO_PUBLICATION: No new unprocessed Australian stories were found in the last 24 hours.")
+        raise RuntimeError("NO_PUBLICATION: No new unprocessed Guardian Australia stories were found in the last 24 hours.")
     published = 0
     failures = []
     for story in candidates:
@@ -210,7 +209,7 @@ def run():
         try:
             page = base.get_article_page(story["url"])
             if not page.get("text"):
-                raise RuntimeError("NO_PUBLICATION: source page unavailable")
+                raise RuntimeError("NO_PUBLICATION: Guardian source page unavailable")
             story.update(page)
             result = groq_client.ask_groq(story, [])
             result = clean_english_result(result)

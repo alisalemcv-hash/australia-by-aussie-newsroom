@@ -86,36 +86,36 @@ def priority_score(story):
     return score, matches
 
 
-def discover(processed=None):
-    processed = processed or set()
-    items = feed_candidates(GUARDIAN_RSS, "Guardian Australia") + feed_candidates(SBS_RSS, "SBS News Australia")
-    items.sort(key=lambda x: x["published"], reverse=True)
-    unique = []
-    for item in items:
-        if item["id"] in processed:
-            continue
-        if any(duplicate_story(item, old) for old in unique):
-            continue
-        unique.append(item)
-
-    now = datetime.now(timezone.utc)
-    selected = []
-    seen = set()
-    for hours in BUCKETS:
-        bucket = [x for x in unique if x["id"] not in seen and now - x["published"] <= timedelta(hours=hours)]
-        bucket.sort(key=lambda x: (priority_score(x)[0], x["published"]), reverse=True)
-        print(f"TIME BUCKET {hours}h: {len(bucket)} eligible fresh stories")
-        for x in bucket:
-            selected.append(x)
-            seen.add(x["id"])
-            if len(selected) >= MAX_POSTS:
-                return selected
-    return selected
-
-
 def _english_words(text):
     text = re.sub(r"<[^>]+>", " ", str(text or ""))
     return re.findall(r"\b[A-Za-z]+(?:['’-][A-Za-z]+)*\b", text)
+
+
+def clean_english_result(result):
+    """Validate the AI result locally instead of delegating to the legacy runner.
+
+    This is intentionally self-contained. The legacy newsroom_runner module loads
+    the old newsroom.py through exec(), so the active router must not depend on
+    any helper namespace from that legacy code for post-AI validation.
+    """
+    if not isinstance(result, dict):
+        raise RuntimeError("NO_PUBLICATION: AI result is not a JSON object")
+
+    website = result.get("website") or {}
+    if not isinstance(website, dict):
+        raise RuntimeError("NO_PUBLICATION: AI website payload is invalid")
+
+    for key, value in website.items():
+        if re.search(r"[\u0600-\u06FF]", str(value or "")):
+            raise RuntimeError(f"NO_PUBLICATION: Arabic text detected in website field {key!r}.")
+
+    category = str(website.get("category", "")).strip()
+    if category not in ALLOWED_CATEGORIES:
+        raise RuntimeError(
+            f"NO_PUBLICATION: Invalid category {category!r}. Allowed: {', '.join(sorted(ALLOWED_CATEGORIES))}"
+        )
+
+    return result
 
 
 def repair_model_output(result):
@@ -214,7 +214,7 @@ def run():
                 raise RuntimeError("NO_PUBLICATION: source page unavailable")
             story.update(page)
             result = groq_client.ask_groq(story, [])
-            result = base.clean_english_result(result)
+            result = clean_english_result(result)
             verification = result.get("verification", {})
             if not result.get("publish", False) or verification.get("status") == "INSUFFICIENT VERIFIED INFORMATION":
                 raise RuntimeError(f"NO_PUBLICATION: model approval failed: {verification.get('status')}")

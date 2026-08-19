@@ -7,8 +7,6 @@ import newsroom_runner as base
 import groq_client
 import image_selector
 
-# Always use the relevance-first selector. It deliberately refuses weak matches
-# and never falls back to a Guardian/SBS branded image.
 base.choose_clean_image = image_selector.choose_clean_image
 
 GUARDIAN_RSS = "https://www.theguardian.com/australia-news/rss"
@@ -86,35 +84,50 @@ def priority_score(story):
     return score, matches
 
 
+def discover(processed=None):
+    processed = processed or set()
+    items = feed_candidates(GUARDIAN_RSS, "Guardian Australia") + feed_candidates(SBS_RSS, "SBS News Australia")
+    items.sort(key=lambda x: x["published"], reverse=True)
+    unique = []
+    for item in items:
+        if item["id"] in processed:
+            continue
+        if any(duplicate_story(item, old) for old in unique):
+            continue
+        unique.append(item)
+
+    now = datetime.now(timezone.utc)
+    selected = []
+    seen = set()
+    for hours in BUCKETS:
+        bucket = [x for x in unique if x["id"] not in seen and now - x["published"] <= timedelta(hours=hours)]
+        bucket.sort(key=lambda x: (priority_score(x)[0], x["published"]), reverse=True)
+        print(f"TIME BUCKET {hours}h: {len(bucket)} eligible fresh stories")
+        for x in bucket:
+            selected.append(x)
+            seen.add(x["id"])
+            if len(selected) >= MAX_POSTS:
+                return selected
+    return selected
+
+
 def _english_words(text):
     text = re.sub(r"<[^>]+>", " ", str(text or ""))
     return re.findall(r"\b[A-Za-z]+(?:['’-][A-Za-z]+)*\b", text)
 
 
 def clean_english_result(result):
-    """Validate the AI result locally instead of delegating to the legacy runner.
-
-    This is intentionally self-contained. The legacy newsroom_runner module loads
-    the old newsroom.py through exec(), so the active router must not depend on
-    any helper namespace from that legacy code for post-AI validation.
-    """
     if not isinstance(result, dict):
         raise RuntimeError("NO_PUBLICATION: AI result is not a JSON object")
-
     website = result.get("website") or {}
     if not isinstance(website, dict):
         raise RuntimeError("NO_PUBLICATION: AI website payload is invalid")
-
     for key, value in website.items():
         if re.search(r"[\u0600-\u06FF]", str(value or "")):
             raise RuntimeError(f"NO_PUBLICATION: Arabic text detected in website field {key!r}.")
-
     category = str(website.get("category", "")).strip()
     if category not in ALLOWED_CATEGORIES:
-        raise RuntimeError(
-            f"NO_PUBLICATION: Invalid category {category!r}. Allowed: {', '.join(sorted(ALLOWED_CATEGORIES))}"
-        )
-
+        raise RuntimeError(f"NO_PUBLICATION: Invalid category {category!r}. Allowed: {', '.join(sorted(ALLOWED_CATEGORIES))}")
     return result
 
 
@@ -122,20 +135,10 @@ def repair_model_output(result):
     website = result.setdefault("website", {})
     social = result.setdefault("social", {})
     video = result.setdefault("video", {})
-
     words = _english_words(website.get("article_html", ""))
     if len(words) >= 25:
         website["excerpt"] = " ".join(words[:25])
-
-    category_tags = {
-        "Politics": "#AustralianPolitics",
-        "Business": "#AustralianBusiness",
-        "Finance": "#AustralianFinance",
-        "Cost of Living": "#CostOfLiving",
-        "Life": "#LifeInAustralia",
-        "World": "#AustraliaNews",
-        "Australia": "#AustraliaNews",
-    }
+    category_tags = {"Politics": "#AustralianPolitics", "Business": "#AustralianBusiness", "Finance": "#AustralianFinance", "Cost of Living": "#CostOfLiving", "Life": "#LifeInAustralia", "World": "#AustraliaNews", "Australia": "#AustraliaNews"}
     preferred = category_tags.get(website.get("category"), "#AustraliaNews")
     existing = [h.strip() for h in video.get("hashtags", []) if isinstance(h, str) and h.strip()]
     hashtags = []
@@ -149,7 +152,6 @@ def repair_model_output(result):
             if len(hashtags) == 3:
                 break
     video["hashtags"] = hashtags[:3]
-
     facebook = social.get("english", "")
     if "👉 Have Your Say" not in facebook:
         facebook = facebook.rstrip() + "\n\n👉 Have Your Say\nDo you support this? YES or NO?"
@@ -162,13 +164,11 @@ def validate_publishable(result):
     social = result.get("social", {})
     video = result.get("video", {})
     errors = []
-
     headline_words = len(str(website.get("headline", "")).split())
     excerpt_count = len(_english_words(website.get("excerpt", "")))
     hashtags = video.get("hashtags", [])
     category = str(website.get("category", "")).strip()
     facebook = str(social.get("english", ""))
-
     if headline_words > 9:
         errors.append(f"Headline exceeds 9 words: {headline_words}")
     if excerpt_count != 25:
@@ -196,7 +196,6 @@ def run():
     print(f"Unique fresh candidates selected: {len(candidates)}")
     if not candidates:
         raise RuntimeError("NO_PUBLICATION: No new unprocessed Australian stories were found in the last 24 hours.")
-
     published = 0
     failures = []
     for story in candidates:
@@ -218,10 +217,8 @@ def run():
             verification = result.get("verification", {})
             if not result.get("publish", False) or verification.get("status") == "INSUFFICIENT VERIFIED INFORMATION":
                 raise RuntimeError(f"NO_PUBLICATION: model approval failed: {verification.get('status')}")
-
             result = repair_model_output(result)
             validate_publishable(result)
-
             image_url, image_credit = base.choose_clean_image(story, result)
             website = result["website"]
             filename = re.sub(r"[^a-zA-Z0-9]+", "-", website["headline"]).strip("-").lower() + ".jpg"
@@ -246,13 +243,11 @@ def run():
             print("SKIPPED:", story["title"])
             print("Reason:", exc)
             continue
-
     print("============================================================")
     print(f"RUN COMPLETE: published {published}/{MAX_POSTS} articles.")
     print(f"FAILED/SKIPPED: {len(failures)}")
     for failure in failures:
         print("FAILURE:", failure)
-
     if published == 0:
         raise RuntimeError("NO_PUBLICATION: 0 articles were confirmed published to WordPress. See FAILURE lines above.")
     return True

@@ -1,4 +1,5 @@
 import re
+import newsroom_runner as base
 
 
 def _tokens(text):

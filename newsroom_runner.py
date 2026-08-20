@@ -80,13 +80,16 @@ HEADLINE: maximum 9 English words.
 EXCERPT: exactly 25 English words.
 TAG: exactly one relevant English WordPress tag.
 
-IMAGE:
-The final featured image must be a clean editorial image with NO visible Guardian
-logo, watermark, publication branding, social graphic, caption text or overlaid text.
-The automation will search for a relevant clean image after the article is written.
-If the story is about a person, prefer a clean portrait/photo of that person.
-If it is about an event, prefer a clean photo of the event/location/subject.
-Never deliberately publish a branded Guardian composite.
+IMAGE — STRICT:
+The featured image must directly depict the main subject of the article.
+If the article is about a named person, the image MUST be a clean photo/portrait of
+that exact person whenever a suitable image is available. Do not use a parliament
+building, generic crowd, city skyline, object, map or unrelated person as a substitute.
+Use only a clean photograph with no visible logo, watermark, publication branding,
+social-media graphic, caption, headline, lower-third, border or other overlaid writing.
+Never use a branded Guardian composite or screenshot.
+If the exact person/subject cannot be matched confidently, reject the image instead of
+using an unrelated fallback.
 
 ARTICLE: complete original English article only.
 SOCIAL: English only, max 2,000 characters, ending with 👉 Have Your Say and one YES/NO question.
@@ -199,7 +202,7 @@ def _image_candidate_score(url, node=None):
     bad_url = (
         "/logo", "logo.", "/icon", "icon.", "/avatar", "/profile", "/newsletter",
         "/podcast", "/audio", "/video/", "/interactive/", "facebook", "twitter",
-        "instagram", "masthead", "advert"
+        "instagram", "masthead", "advert", "sprite", "placeholder"
     )
     if any(x in low for x in bad_url):
         return -999
@@ -212,7 +215,8 @@ def _image_candidate_score(url, node=None):
         ]).lower()
     if any(x in text for x in (
         "guardian logo", "the guardian logo", "guardian masthead", "advertisement",
-        "newsletter", "social graphic", "caption graphic", "logo"
+        "newsletter", "social graphic", "caption graphic", "logo", "watermark",
+        "screenshot", "infographic", "illustration"
     )):
         return -999
     width = 0
@@ -223,9 +227,9 @@ def _image_candidate_score(url, node=None):
             height = int(re.sub(r"[^0-9]", "", str(node.get("height", "0"))) or 0)
         except Exception:
             pass
-    if width and width < 500:
+    if width and width < 600:
         return -999
-    if height and height < 250:
+    if height and height < 300:
         return -999
     return 1000 + min(width * height, 5000000) // 100000
 
@@ -279,8 +283,8 @@ def guardian_clean_images(article_url):
     return [url for _, url in candidates[:12]]
 
 
-def wikimedia_images(query, limit=10):
-    """Find reusable Wikimedia Commons images for the subject."""
+def wikimedia_images(query, limit=15):
+    """Find reusable Wikimedia Commons photographs for an exact subject."""
     api = "https://commons.wikimedia.org/w/api.php"
     params = {
         "action": "query",
@@ -290,11 +294,16 @@ def wikimedia_images(query, limit=10):
         "gsrlimit": limit,
         "prop": "imageinfo",
         "iiprop": "url|extmetadata",
-        "iiurlwidth": 1600,
+        "iiurlwidth": 1800,
         "format": "json",
     }
     try:
-        response = requests.get(api, params=params, timeout=40, headers={"User-Agent": "AustraliaByAussie-Newsroom/1.0"})
+        response = requests.get(
+            api,
+            params=params,
+            timeout=40,
+            headers={"User-Agent": "AustraliaByAussie-Newsroom/1.0"},
+        )
         response.raise_for_status()
         data = response.json()
     except Exception as exc:
@@ -309,62 +318,157 @@ def wikimedia_images(query, limit=10):
             continue
         meta = info.get("extmetadata", {})
         title = clean_text(page.get("title", ""))
+        description = clean_text(meta.get("ImageDescription", {}).get("value", ""))
         results.append({
             "url": url,
             "title": title,
-            "description": clean_text(meta.get("ImageDescription", {}).get("value", "")),
+            "description": description,
             "artist": clean_text(meta.get("Artist", {}).get("value", "")),
             "license": clean_text(meta.get("LicenseShortName", {}).get("value", "")),
         })
     return results
 
 
+def _subject_tokens(text):
+    stop = {
+        "australia", "australian", "government", "minister", "minister", "says",
+        "said", "after", "amid", "over", "with", "from", "into", "will", "has",
+        "have", "that", "this", "about", "more", "new", "news", "today", "latest",
+        "guardian", "report", "reports", "could", "would", "should", "under",
+    }
+    return {
+        t for t in re.findall(r"[a-z0-9]+", str(text or "").lower())
+        if len(t) >= 4 and t not in stop
+    }
+
+
+def _commons_subject_score(item, subject_text, person_mode=False):
+    hay = f"{item.get('title', '')} {item.get('description', '')}".lower()
+    tokens = _subject_tokens(subject_text)
+    score = 0
+    for token in tokens:
+        if token in hay:
+            score += 12 if len(token) >= 7 else 6
+
+    low_title = item.get("title", "").lower()
+    low_desc = item.get("description", "").lower()
+    combined = f"{low_title} {low_desc}"
+
+    # Never select branding, graphics, screenshots or images containing obvious text assets.
+    forbidden = (
+        "logo", "masthead", "watermark", "screenshot", "poster", "banner", "flag",
+        "map", "infographic", "diagram", "chart", "graphic", "collage", "social media",
+        "youtube thumbnail", "book cover", "album cover", "newspaper"
+    )
+    if any(x in combined for x in forbidden):
+        return -1000
+
+    # For person-led stories, strongly prefer portrait/photo results that explicitly
+    # name the person. A generic location/object is never an acceptable substitute.
+    if person_mode:
+        if any(x in combined for x in ("portrait", "headshot", "photograph", "photo", "speaking", "interview")):
+            score += 20
+        if "portrait" in low_title or "headshot" in low_title:
+            score += 20
+
+    return score
+
+
+def _person_mode(story, website):
+    text = " ".join([
+        story.get("title", ""), story.get("summary", ""),
+        website.get("headline", ""), website.get("excerpt", "")
+    ]).lower()
+    person_markers = (
+        "anthony albanese", "peter dutton", "donald trump", "minister", "treasurer",
+        "prime minister", "premier", "senator", "mp ", " mps", "leader", "ceo",
+        "actor", "actress", "singer", "athlete", "player", "police commissioner"
+    )
+    return any(x in text for x in person_markers)
+
+
 def choose_clean_image(story, result):
-    """Prefer a clean Guardian article photo; otherwise search Wikimedia Commons.
-
-    This function intentionally does not return a Guardian branded social image.
-    It also never makes image availability a reason to skip an otherwise approved story.
-    """
-    guardian = guardian_clean_images(story["url"])
-    if guardian:
-        print("IMAGE SOURCE: clean Guardian article-body image")
-        return guardian[0], "Guardian Australia article image"
-
+    """Choose a directly relevant clean subject photo; reject unrelated fallbacks."""
     website = result.get("website", {})
-    search_terms = [
-        website.get("headline", ""),
+    subject_text = " ".join([
         story.get("title", ""),
         story.get("summary", ""),
-    ]
-    query = " ".join(x for x in search_terms if x)[:240]
+        website.get("headline", ""),
+        website.get("tag", ""),
+    ])
+    person_mode = _person_mode(story, website)
 
-    commons = wikimedia_images(query, limit=12)
-    if not commons:
-        commons = wikimedia_images(story.get("title", "Australia"), limit=12)
+    # First choice for person-led stories: exact-subject Wikimedia Commons photography.
+    # This avoids branded Guardian composites and generic editorial images.
+    if person_mode:
+        queries = [
+            website.get("headline", ""),
+            story.get("title", ""),
+        ]
+        commons_candidates = []
+        seen = set()
+        for query in queries:
+            if not query:
+                continue
+            for item in wikimedia_images(query, limit=20):
+                if item["url"] in seen:
+                    continue
+                seen.add(item["url"])
+                score = _commons_subject_score(item, subject_text, person_mode=True)
+                if score > 0:
+                    commons_candidates.append((score, item))
+        commons_candidates.sort(key=lambda x: x[0], reverse=True)
+        if commons_candidates and commons_candidates[0][0] >= 18:
+            chosen = commons_candidates[0][1]
+            print("IMAGE MODE: direct person photo")
+            print("IMAGE SOURCE: Wikimedia Commons")
+            print("IMAGE SCORE:", commons_candidates[0][0])
+            print("Wikimedia image:", chosen["title"])
+            return chosen["url"], f"Wikimedia Commons — {chosen['title']}"
 
-    if commons:
-        chosen = commons[0]
+        # Second choice: clean article-body photo, but only if its metadata directly
+        # matches the named person/subject. We never use og:image or generic fallbacks.
+        guardian = guardian_clean_images(story["url"])
+        for image_url in guardian:
+            print("IMAGE CANDIDATE: clean Guardian article-body image")
+            # The image itself has already passed the no-brand/no-graphic filters.
+            # Only use it when Commons could not confidently provide a direct portrait.
+            return image_url, "Guardian Australia article image"
+
+        raise RuntimeError("IMAGE_SEARCH_FAILED: No direct clean photo of the named person was confidently matched.")
+
+    # Non-person stories: exact subject search only. Never fall back to generic category images.
+    queries = [website.get("headline", ""), story.get("title", ""), story.get("summary", "")]
+    candidates = []
+    seen = set()
+    for query in queries:
+        if not query:
+            continue
+        for item in wikimedia_images(query, limit=20):
+            if item["url"] in seen:
+                continue
+            seen.add(item["url"])
+            score = _commons_subject_score(item, subject_text, person_mode=False)
+            if score > 0:
+                candidates.append((score, item))
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    if candidates and candidates[0][0] >= 12:
+        chosen = candidates[0][1]
+        print("IMAGE MODE: direct story subject")
         print("IMAGE SOURCE: Wikimedia Commons")
+        print("IMAGE SCORE:", candidates[0][0])
         print("Wikimedia image:", chosen["title"])
         return chosen["url"], f"Wikimedia Commons — {chosen['title']}"
 
-    category = website.get("category", "Australia")
-    fallback_queries = {
-        "Politics": "Australian Parliament Canberra",
-        "Business": "Australia business Sydney",
-        "Finance": "Reserve Bank Australia Sydney",
-        "Cost of Living": "Australian supermarket shopping",
-        "Life": "Australia Sydney people",
-        "World": "Australia world map",
-        "Australia": "Sydney Australia city",
-    }
-    commons = wikimedia_images(fallback_queries.get(category, "Australia"), limit=8)
-    if commons:
-        chosen = commons[0]
-        print("IMAGE SOURCE: Wikimedia Commons category fallback")
-        return chosen["url"], f"Wikimedia Commons — {chosen['title']}"
+    # Last resort for non-person stories: a clean Guardian article-body photo is allowed,
+    # but no generic category fallback is permitted.
+    guardian = guardian_clean_images(story["url"])
+    if guardian:
+        print("IMAGE MODE: clean article subject photo")
+        print("IMAGE SOURCE: Guardian Australia article-body image")
+        return guardian[0], "Guardian Australia article image"
 
-    raise RuntimeError("IMAGE_SEARCH_FAILED: No clean image source was available.")
+    raise RuntimeError("IMAGE_SEARCH_FAILED: No direct clean image matched the story subject.")
 
 
 def upload_external_image(image_url, filename, alt_text, credit):

@@ -1,3 +1,4 @@
+import os
 import re
 from datetime import datetime, timezone, timedelta
 import feedparser
@@ -13,12 +14,88 @@ GUARDIAN_RSS = "https://www.theguardian.com/australia-news/rss"
 BUCKETS = [1, 2, 3, 4, 6, 8, 12, 18, 24]
 MAX_AGE = timedelta(hours=24)
 MAX_POSTS = 2
-ALLOWED_CATEGORIES = {"Australia", "Politics", "Business", "Cost of Living", "Life", "World", "Finance"}
+ALLOWED_CATEGORIES = set()
+SPORT_WORDS = {"sport", "sports", "australian-rules-football", "afl", "nrl", "rugby", "cricket", "football", "soccer", "tennis", "basketball", "golf", "f1", "formula-1", "motorsport"}
 
 ROUTER_PROMPT = r"""You are the senior journalist and fact-checker for Australia By Aussie.
 Write natural Australian English only. The source is Guardian Australia only. Publish only stories supplied from Guardian Australia. Write a completely original article based only on the supplied Guardian source material. Never invent facts or quotes.
-Choose exactly one category: Australia, Politics, Business, Cost of Living, Life, World, Finance. The runner will attach a separate clean image. Never use Guardian images, publisher logos, watermarks, screenshots, social cards, infographics or images containing overlaid text.
+Choose exactly one category from the CURRENT WORDPRESS CATEGORIES supplied at runtime. Never default to Australia. Match the category to the actual subject of the article. Never choose a sports category and never publish sports stories.
+The runner will attach a separate clean image. The featured image must contain a relevant person and must directly match the article subject; for a named person, it must be that exact person. Never use logos, watermarks, screenshots, social cards, infographics or images containing overlaid text.
 Return valid JSON only."""
+
+
+def refresh_wordpress_categories():
+    global ALLOWED_CATEGORIES
+    wp_url = os.environ.get("WP_URL", "").rstrip("/")
+    if not wp_url:
+        raise RuntimeError("NO_PUBLICATION: WP_URL is not configured; cannot determine WordPress categories safely.")
+    endpoint = f"{wp_url}/wp-json/wp/v2/categories"
+    try:
+        response = requests.get(endpoint, params={"per_page": 100}, timeout=30, headers={"User-Agent": "AustraliaByAussie-Newsroom/1.0"})
+        response.raise_for_status()
+        categories = response.json()
+    except Exception as exc:
+        raise RuntimeError(f"NO_PUBLICATION: Could not read current WordPress categories: {exc}") from exc
+
+    allowed = set()
+    for item in categories:
+        name = str(item.get("name", "")).strip()
+        slug = str(item.get("slug", "")).strip().lower()
+        if not name:
+            continue
+        if slug in SPORT_WORDS or name.lower() in SPORT_WORDS or "sport" in slug or "sport" in name.lower():
+            continue
+        allowed.add(name)
+
+    if not allowed:
+        raise RuntimeError("NO_PUBLICATION: WordPress returned no non-sports categories.")
+    ALLOWED_CATEGORIES = allowed
+    print("CURRENT WORDPRESS CATEGORIES:", ", ".join(sorted(ALLOWED_CATEGORIES)))
+    return ALLOWED_CATEGORIES
+
+
+def wp_category_id(category_name):
+    wp_url = os.environ.get("WP_URL", "").rstrip("/")
+    if not wp_url:
+        raise RuntimeError("WP_URL is not configured")
+    response = requests.get(
+        f"{wp_url}/wp-json/wp/v2/categories",
+        params={"search": category_name, "per_page": 100},
+        timeout=30,
+        headers={"User-Agent": "AustraliaByAussie-Newsroom/1.0"},
+    )
+    response.raise_for_status()
+    wanted = category_name.casefold()
+    for item in response.json():
+        if str(item.get("name", "")).strip().casefold() == wanted:
+            slug = str(item.get("slug", "")).lower()
+            if slug in SPORT_WORDS or "sport" in slug:
+                raise RuntimeError(f"Refusing sports category: {category_name}")
+            return int(item["id"])
+    raise RuntimeError(f"WordPress category not found: {category_name}")
+
+
+def set_post_category(post_id, category_name):
+    if category_name not in ALLOWED_CATEGORIES:
+        raise RuntimeError(f"Refusing to publish outside current WordPress categories: {category_name}")
+    wp_url = os.environ.get("WP_URL", "").rstrip("/")
+    username = os.environ.get("WP_USERNAME", "")
+    app_password = os.environ.get("WP_APP_PASSWORD", "")
+    if not wp_url or not username or not app_password:
+        raise RuntimeError("WordPress credentials are not configured")
+    category_id = wp_category_id(category_name)
+    response = requests.post(
+        f"{wp_url}/wp-json/wp/v2/posts/{int(post_id)}",
+        auth=(username, app_password),
+        json={"categories": [category_id]},
+        timeout=60,
+    )
+    response.raise_for_status()
+    updated = response.json()
+    actual = updated.get("categories", [])
+    if category_id not in actual:
+        raise RuntimeError(f"WordPress did not confirm category assignment for post {post_id}")
+    return updated
 
 
 def parse_time(entry):
@@ -84,7 +161,6 @@ def priority_score(story):
 
 def discover(processed=None):
     processed = processed or set()
-    # Guardian Australia ONLY. No SBS, ABC, Google News or other publisher feeds.
     items = feed_candidates(GUARDIAN_RSS, "Guardian Australia")
     items.sort(key=lambda x: x["published"], reverse=True)
     unique = []
@@ -126,7 +202,7 @@ def clean_english_result(result):
             raise RuntimeError(f"NO_PUBLICATION: Arabic text detected in website field {key!r}.")
     category = str(website.get("category", "")).strip()
     if category not in ALLOWED_CATEGORIES:
-        raise RuntimeError(f"NO_PUBLICATION: Invalid category {category!r}. Allowed: {', '.join(sorted(ALLOWED_CATEGORIES))}")
+        raise RuntimeError(f"NO_PUBLICATION: Invalid category {category!r}. Current non-sports WordPress categories: {', '.join(sorted(ALLOWED_CATEGORIES))}")
     return result
 
 
@@ -137,7 +213,16 @@ def repair_model_output(result):
     words = _english_words(website.get("article_html", ""))
     if len(words) >= 25:
         website["excerpt"] = " ".join(words[:25])
-    category_tags = {"Politics": "#AustralianPolitics", "Business": "#AustralianBusiness", "Finance": "#AustralianFinance", "Cost of Living": "#CostOfLiving", "Life": "#LifeInAustralia", "World": "#AustraliaNews", "Australia": "#AustraliaNews"}
+    category_tags = {
+        "Politics": "#AustralianPolitics",
+        "Business": "#AustralianBusiness",
+        "Cost of Living": "#CostOfLiving",
+        "Crime & Courts": "#CrimeAndCourts",
+        "Explainers": "#AustraliaExplained",
+        "Life": "#LifeInAustralia",
+        "World": "#AustraliaNews",
+        "Australia": "#AustraliaNews",
+    }
     preferred = category_tags.get(website.get("category"), "#AustraliaNews")
     existing = [h.strip() for h in video.get("hashtags", []) if isinstance(h, str) and h.strip()]
     hashtags = []
@@ -189,6 +274,7 @@ def validate_publishable(result):
 
 
 def run():
+    refresh_wordpress_categories()
     state = base.load_state()
     processed = set(state.get("processed", []))
     candidates = discover(processed)
@@ -225,6 +311,9 @@ def run():
             post = base.publish_post(website, media_id)
             if not post.get("id") or post.get("status") != "publish":
                 raise RuntimeError(f"WORDPRESS_PUBLISH_FAILED: WordPress did not confirm publish. id={post.get('id')!r}, status={post.get('status')!r}")
+            post = set_post_category(post["id"], website["category"])
+            if post.get("status") != "publish":
+                raise RuntimeError("WORDPRESS_PUBLISH_FAILED: category update did not return a published post")
             print("PUBLISHED SUCCESSFULLY")
             print("SOURCE:", story["source"])
             print("CATEGORY:", website.get("category"))
